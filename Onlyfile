@@ -53,6 +53,21 @@ clean():
     find PaddleOCR -maxdepth 1 -type d -name 'kdeocr-ppocrv6-*-r*' -exec rm -r -- {} +
     find PaddleOCR -maxdepth 1 -type f -name 'kdeocr-ppocrv6-*-r*.tar.zst' -delete
 
+# Show current version
+show():
+    uv run scripts/version.py show
+
+# Update version and publish
+publish(version):
+    test -z "$(git status --porcelain)"
+    uv run scripts/version.py change {{ version }}
+    uv run scripts/notice.py
+    only ci
+    git add -- Cargo.toml Cargo.lock NOTICE
+    git commit -m "chore: update to {{ version }}"
+    git tag {{ version }}
+    git push --atomic origin HEAD {{ version }}
+
 // ========================================
 [bundle]
 # Bundle small to tar.zst

@@ -85,3 +85,5 @@ path = "/home/user/.local/share/kdeocr/models/ppocrv6-small-r1"
 ## License
 
 [Apache License 2.0](LICENSE)
+
+Third-party notices are in [NOTICE](NOTICE).
