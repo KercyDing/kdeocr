@@ -30,6 +30,7 @@ pub(crate) struct DetectionInput {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Rect {
     pub(crate) left: u32,
+    pub(crate) right: u32,
     pub(crate) top: u32,
     pub(crate) bottom: u32,
 }
@@ -44,6 +45,42 @@ impl Rect {
 pub(crate) struct TextBox {
     pub(crate) points: [Point<f32>; 4],
     pub(crate) bounds: Rect,
+}
+
+pub(crate) fn group_lines(boxes: Vec<TextBox>) -> Vec<Vec<TextBox>> {
+    let mut lines: Vec<Vec<TextBox>> = Vec::new();
+    for text_box in boxes {
+        if let Some(line) = lines
+            .iter_mut()
+            .rev()
+            .find(|line| line.iter().any(|other| same_line(other, &text_box)))
+        {
+            line.push(text_box);
+        } else {
+            lines.push(vec![text_box]);
+        }
+    }
+    for line in &mut lines {
+        line.sort_by_key(|text_box| text_box.bounds.left);
+    }
+    lines
+}
+
+pub(crate) fn separated_prefix(line: &[TextBox]) -> Option<TextBox> {
+    let [first, second, ..] = line else {
+        return None;
+    };
+    let gap = second.bounds.left.saturating_sub(first.bounds.right);
+    let height = first.bounds.height().max(second.bounds.height());
+    (gap.saturating_mul(4) > height.saturating_mul(3)).then_some(*first)
+}
+
+fn same_line(left: &TextBox, right: &TextBox) -> bool {
+    let top = left.bounds.top.max(right.bounds.top);
+    let bottom = left.bounds.bottom.min(right.bounds.bottom);
+    let overlap = bottom.saturating_sub(top);
+    let height = left.bounds.height().min(right.bounds.height());
+    overlap.saturating_mul(2) >= height
 }
 
 #[derive(Clone, Copy)]
@@ -210,6 +247,10 @@ fn map_quad(points: [Point<f32>; 4], geometry: Geometry) -> TextBox {
         .iter()
         .map(|point| point.y.round())
         .fold(geometry.original_height as f32, f32::min) as u32;
+    let right = points
+        .iter()
+        .map(|point| point.x.round())
+        .fold(0.0, f32::max) as u32;
     let bottom = points
         .iter()
         .map(|point| point.y.round())
@@ -218,6 +259,9 @@ fn map_quad(points: [Point<f32>; 4], geometry: Geometry) -> TextBox {
         points,
         bounds: Rect {
             left,
+            right: right
+                .max(left.saturating_add(1))
+                .min(geometry.original_width),
             top,
             bottom: bottom
                 .max(top.saturating_add(1))
@@ -336,7 +380,9 @@ fn polygon_area(points: &[Point<f32>; 4]) -> f64 {
 mod tests {
     use imageproc::point::Point;
 
-    use super::{Geometry, map_quad, polygon_score, unclip};
+    use super::{
+        Geometry, Rect, TextBox, group_lines, map_quad, polygon_score, separated_prefix, unclip,
+    };
 
     #[test]
     fn scores_polygon() {
@@ -418,5 +464,43 @@ mod tests {
 
         assert_eq!(text_box.points[1].x, 100.0);
         assert_eq!(text_box.bounds.bottom, 20);
+    }
+
+    #[test]
+    fn groups_lines() {
+        let text_box = |left, right, top, bottom| TextBox {
+            points: [Point::new(0.0, 0.0); 4],
+            bounds: Rect {
+                left,
+                right,
+                top,
+                bottom,
+            },
+        };
+        let lines = group_lines(vec![
+            text_box(0, 20, 0, 20),
+            text_box(30, 50, 2, 22),
+            text_box(0, 20, 30, 50),
+        ]);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 2);
+        assert_eq!(lines[1].len(), 1);
+    }
+
+    #[test]
+    fn finds_prefix() {
+        let text_box = |left, right| TextBox {
+            points: [Point::new(0.0, 0.0); 4],
+            bounds: Rect {
+                left,
+                right,
+                top: 0,
+                bottom: 20,
+            },
+        };
+        let line = [text_box(0, 20), text_box(40, 60), text_box(65, 85)];
+
+        assert_eq!(separated_prefix(&line).unwrap().bounds.right, 20);
     }
 }

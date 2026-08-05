@@ -7,34 +7,50 @@ use super::OcrError;
 use super::detection::TextBox;
 
 const INPUT_HEIGHT: u32 = 48;
-const INPUT_WIDTH: u32 = 320;
+const INPUT_WIDTH_MIN: u32 = 320;
+const INPUT_WIDTH_MAX: u32 = 8192;
+const OVERLAP_WIDTH: u32 = 128;
+const CHUNKS_MAX: usize = 64;
 
-pub(crate) fn preprocess(image: DynamicImage) -> Result<Vec<f32>, OcrError> {
+pub(crate) struct RecognitionInput {
+    pub(crate) tensor: Vec<f32>,
+    pub(crate) width: usize,
+}
+
+pub(crate) fn preprocess(image: DynamicImage) -> Result<RecognitionInput, OcrError> {
     let (width, height) = image.dimensions();
     if width == 0 || height == 0 {
         return Err(OcrError::Image(image::ImageError::Limits(
             image::error::LimitError::from_kind(image::error::LimitErrorKind::DimensionError),
         )));
     }
-    let resized_width =
-        ((width as f32 * INPUT_HEIGHT as f32 / height as f32).ceil() as u32).clamp(1, INPUT_WIDTH);
+    let resized_width = (width as f64 * INPUT_HEIGHT as f64 / height as f64).ceil() as u32;
+    if resized_width > INPUT_WIDTH_MAX {
+        return Err(OcrError::Runtime(format!(
+            "recognition input width {resized_width} exceeds maximum {INPUT_WIDTH_MAX}"
+        )));
+    }
+    let input_width = resized_width.max(INPUT_WIDTH_MIN);
     let resized = image
         .resize_exact(resized_width, INPUT_HEIGHT, FilterType::Lanczos3)
         .to_rgb8();
-    let mut tensor = vec![0.0_f32; (3 * INPUT_HEIGHT * INPUT_WIDTH) as usize];
+    let mut tensor = vec![0.0_f32; (3 * INPUT_HEIGHT * input_width) as usize];
     for y in 0..INPUT_HEIGHT {
         for x in 0..resized_width {
             let pixel = resized.get_pixel(x, y).0;
             let bgr = [pixel[2], pixel[1], pixel[0]];
             for (channel, value) in bgr.iter().enumerate() {
-                let index = channel * (INPUT_HEIGHT * INPUT_WIDTH) as usize
-                    + y as usize * INPUT_WIDTH as usize
+                let index = channel * (INPUT_HEIGHT * input_width) as usize
+                    + y as usize * input_width as usize
                     + x as usize;
                 tensor[index] = *value as f32 / 127.5 - 1.0;
             }
         }
     }
-    Ok(tensor)
+    Ok(RecognitionInput {
+        tensor,
+        width: input_width as usize,
+    })
 }
 
 pub(crate) fn crop(image: &DynamicImage, text_box: TextBox) -> Result<DynamicImage, OcrError> {
@@ -68,6 +84,79 @@ pub(crate) fn crop(image: &DynamicImage, text_box: TextBox) -> Result<DynamicIma
         output
     };
     Ok(DynamicImage::ImageRgb8(output))
+}
+
+pub(crate) fn crop_line(
+    image: &DynamicImage,
+    text_boxes: &[TextBox],
+) -> Result<DynamicImage, OcrError> {
+    if text_boxes.len() == 1 {
+        return crop(image, text_boxes[0]);
+    }
+    let left = text_boxes
+        .iter()
+        .map(|text_box| text_box.bounds.left)
+        .min()
+        .unwrap_or(0);
+    let right = text_boxes
+        .iter()
+        .map(|text_box| text_box.bounds.right)
+        .max()
+        .unwrap_or(left);
+    let top = text_boxes
+        .iter()
+        .map(|text_box| text_box.bounds.top)
+        .min()
+        .unwrap_or(0);
+    let bottom = text_boxes
+        .iter()
+        .map(|text_box| text_box.bounds.bottom)
+        .max()
+        .unwrap_or(top);
+    let padding = bottom.saturating_sub(top);
+    let right = right.saturating_add(padding).min(image.width());
+    if right <= left || bottom <= top {
+        return Err(OcrError::Runtime(
+            "detected text line has invalid bounds".to_owned(),
+        ));
+    }
+    Ok(image.crop_imm(left, top, right - left, bottom - top))
+}
+
+pub(crate) fn split(image: DynamicImage) -> Result<Vec<DynamicImage>, OcrError> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return Err(OcrError::Image(image::ImageError::Limits(
+            image::error::LimitError::from_kind(image::error::LimitErrorKind::DimensionError),
+        )));
+    }
+    let width_max = height.saturating_mul(INPUT_WIDTH_MAX) / INPUT_HEIGHT;
+    if width <= width_max.max(1) {
+        return Ok(vec![image]);
+    }
+    let overlap = height
+        .saturating_mul(OVERLAP_WIDTH)
+        .div_ceil(INPUT_HEIGHT)
+        .max(1)
+        .min(width_max.saturating_sub(1));
+    let step = width_max.saturating_sub(overlap).max(1);
+    let count = 1 + width.saturating_sub(width_max).div_ceil(step);
+    if count as usize > CHUNKS_MAX {
+        return Err(OcrError::Runtime(format!(
+            "text line requires {count} recognition chunks; maximum is {CHUNKS_MAX}"
+        )));
+    }
+    let mut chunks = Vec::with_capacity(count as usize);
+    let mut left: u32 = 0;
+    loop {
+        let right = left.saturating_add(width_max).min(width);
+        chunks.push(image.crop_imm(left, 0, right - left, height));
+        if right == width {
+            break;
+        }
+        left = right - overlap;
+    }
+    Ok(chunks)
 }
 
 fn distance(left: Point<f32>, right: Point<f32>) -> f32 {
@@ -113,7 +202,9 @@ pub(crate) fn decode_ctc(
 
 #[cfg(test)]
 mod tests {
-    use super::decode_ctc;
+    use image::{DynamicImage, GenericImageView};
+
+    use super::{decode_ctc, preprocess, split};
 
     #[test]
     fn decodes_ctc() {
@@ -123,5 +214,22 @@ mod tests {
         ];
         let text = decode_ctc(&values, &['a', 'b'], 0, 3).unwrap();
         assert_eq!(text, "aba");
+    }
+
+    #[test]
+    fn splits_long_line() {
+        let chunks = split(DynamicImage::new_rgb8(20_000, 48)).unwrap();
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].dimensions(), (8192, 48));
+        assert_eq!(chunks.last().unwrap().height(), 48);
+    }
+
+    #[test]
+    fn preserves_long_line() {
+        let input = preprocess(DynamicImage::new_rgb8(1200, 48)).unwrap();
+
+        assert_eq!(input.width, 1200);
+        assert_eq!(input.tensor.len(), 3 * 48 * 1200);
     }
 }
