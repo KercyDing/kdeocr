@@ -252,13 +252,12 @@ fn run_doctor() -> Result<(), AppError> {
         let state = if check.ok { "ok" } else { "missing" };
         println!("[{state}] {:<12} {}", check.name, check.detail);
     }
-    println!("model profile: v6-small (enabled in M1)");
-
     if checks.iter().any(|check| !check.ok) {
         return Err(AppError::MissingDependency(
             "Environment check failed; install the missing dependencies and retry".to_owned(),
         ));
     }
+    println!("Environment check passed.");
     Ok(())
 }
 
