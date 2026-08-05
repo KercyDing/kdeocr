@@ -8,4 +8,4 @@ Requires `Spectacle` and `wl-copy`.
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)

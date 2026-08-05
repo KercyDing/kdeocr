@@ -3,7 +3,7 @@ name = "kdeocr"
 version = "0.1.0"
 edition = "2024"
 description = "A small screenshot tool for KDE Plasma 6 on Wayland"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
