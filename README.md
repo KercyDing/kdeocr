@@ -1,36 +1,44 @@
-# KDEOCR
+# KOCR
 
-A small screenshot tool for KDE Plasma 6 on Wayland.
+An offline OCR tool for KDE Plasma 6 on Wayland.
 
-It currently captures a selected region and copies the PNG to the clipboard.
+KOCR can recognize an existing PNG or capture a screen region with Spectacle.
+Captured images or recognized text can be copied to the Wayland clipboard.
 
-Capture requires `Spectacle` and `wl-copy`. Model installation requires `curl`.
+## Requirements
+
+- Linux with KDE Plasma 6 on Wayland
+- `Spectacle` and `wl-copy`
+- ONNX Runtime
+- `curl` for model installation
 
 ## Capture
 
 ```text
 kocr capture
-kocr capture --ocr
+kocr capture -o
 ```
 
-## OCR
+The default command copies the captured PNG. `-o` runs OCR, prints the text,
+and copies it instead.
 
-Recognize text from an image:
+## Image
+
+Recognize an existing PNG and print the text:
 
 ```text
-kocr image image.png
+kocr image test.png
 ```
 
 ## Models
 
-List and install bundled model profiles:
+Manage OCR models by ID or name:
 
 ```text
 kocr list
-kocr use 1
-kocr install ppocrv6-small-r1
 kocr install 1
-kocr uninstall ppocrv6-small-r1
+kocr use 1
+kocr uninstall 1
 kocr config
 ```
 

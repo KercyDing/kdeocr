@@ -33,7 +33,7 @@ const CLI_STYLES: Styles = Styles::styled()
     name = "kocr",
     version,
     propagate_version = true,
-    about = "KDE screenshot tool",
+    about = "Offline OCR tool for KDE Plasma",
     color = clap::ColorChoice::Always,
     styles = CLI_STYLES,
     disable_help_subcommand = true
