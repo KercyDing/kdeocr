@@ -13,3 +13,10 @@ det = "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx"
 rec = "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx"
 url = "https://github.com/KercyDing/kdeocr/releases/download/ppocrv6-medium-r1/kdeocr-ppocrv6-medium-r1.tar.zst"
 sha256 = "df28835edc6df9b339c74ee212d453fad3d1666666cd5d7a3fbfdec028d33ed2"
+
+[profiles.ppocrv6-tiny-r1]
+id = 3
+det = "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det_onnx"
+rec = "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx"
+url = "https://github.com/KercyDing/kdeocr/releases/download/ppocrv6-tiny-r1/kdeocr-ppocrv6-tiny-r1.tar.zst"
+sha256 = "3acd0de129d05593977c50a423a7292cb14915f681330de973878217f75258c2"
