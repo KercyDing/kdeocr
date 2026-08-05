@@ -9,21 +9,7 @@ Captured images or recognized text can be copied to the Wayland clipboard.
 ## Install
 
 ```text
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/KercyDing/kdeocr/main/scripts/install.sh)"
-```
-
-The installer selects an OCR model: small (`24.8 MiB`, default), medium
-(`94.9 MiB`), or tiny (`5.4 MiB`). For a non-interactive install, set
-`KOCR_MODEL`, for example:
-
-```text
-KOCR_MODEL=medium bash -c "$(curl -fsSL https://raw.githubusercontent.com/KercyDing/kdeocr/main/scripts/install.sh)"
-```
-
-Uninstall:
-
-```text
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/KercyDing/kdeocr/main/scripts/uninstall.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/KercyDing/kdeocr/main/script.sh)"
 ```
 
 ## Requirements

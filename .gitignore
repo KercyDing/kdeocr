@@ -11,6 +11,3 @@ __pycache__
 *.njsproj
 *.sln
 *.sw?
-
-*.md
-!README.md
