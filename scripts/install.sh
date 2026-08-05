@@ -17,6 +17,27 @@ require() {
     command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
+select_model() {
+    local choice=${KOCR_MODEL:-}
+
+    if [[ -z $choice ]]; then
+        echo "Select OCR model:" >&2
+        echo "  1) ppocrv6-small-r1   24.8 MiB  Recommended" >&2
+        echo "  2) ppocrv6-medium-r1  94.9 MiB" >&2
+        echo "  3) ppocrv6-tiny-r1     5.4 MiB" >&2
+        if [[ -t 0 ]]; then
+            read -r -p "Model [1]: " choice
+        fi
+    fi
+
+    case ${choice:-1} in
+        1 | small | ppocrv6-small-r1) printf '%s\n' ppocrv6-small-r1 ;;
+        2 | medium | ppocrv6-medium-r1) printf '%s\n' ppocrv6-medium-r1 ;;
+        3 | tiny | ppocrv6-tiny-r1) printf '%s\n' ppocrv6-tiny-r1 ;;
+        *) fail "unknown model: $choice" ;;
+    esac
+}
+
 download_binary() {
     local machine target latest_url tag version package archive checksum expected actual release_url
 
@@ -65,6 +86,7 @@ if (( $# != 0 )); then
 fi
 
 require install
+require curl
 require mktemp
 require realpath
 require systemctl
@@ -80,12 +102,18 @@ if [[ -n ${KOCR_BINARY:-} ]]; then
 else
     source_binary=$(download_binary)
 fi
+model=$(select_model)
 
 [[ $binary_path != *$'\n'* && $binary_path != *'"'* ]] \
     || fail "install path contains unsupported characters"
 mkdir -p -- "$install_dir" "$unit_dir"
 install -m 0755 "$source_binary" "$temporary_dir/kocr"
 mv -f -- "$temporary_dir/kocr" "$binary_path"
+model_dir=${XDG_DATA_HOME:-"$HOME/.local/share"}/kdeocr/models/$model
+if [[ ! -f $model_dir/manifest.toml ]]; then
+    "$binary_path" install "$model"
+fi
+"$binary_path" use "$model"
 
 unit_temporary=$(mktemp --tmpdir="$unit_dir" .kocr.service.XXXXXX)
 cat > "$unit_temporary" <<EOF
@@ -113,4 +141,5 @@ systemctl --user enable kocr.service
 systemctl --user restart kocr.service
 
 echo "Installed kocr to $binary_path"
+echo "Model: $model"
 echo "Shortcut: Alt+1"
