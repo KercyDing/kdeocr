@@ -18,7 +18,6 @@ rr(args..):
 ci() & check & test:
     echo 'CI done.'
 
-// ========================================
 # Fmt, check and clippy
 check():
     cargo fmt --all
@@ -31,3 +30,9 @@ test() ? @has("cargo-nextest"):
 
 test():
     cargo test --all-targets --workspace
+
+// ========================================
+[bundle]
+# Bundle small to tar.zst
+small() ? @has("uv"):
+    uv run PaddleOCR/bundle-small.py
