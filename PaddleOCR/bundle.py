@@ -4,7 +4,7 @@
 # dependencies = ["huggingface_hub>=0.30", "onnx>=1.17", "PyYAML>=6.0"]
 # ///
 
-"""Build the reproducible PP-OCRv6-small model release bundle."""
+"""Build a PP-OCRv6 model release bundle."""
 
 from __future__ import annotations
 
@@ -14,15 +14,55 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
 import onnx
 import yaml
 from huggingface_hub import hf_hub_download, model_info
 
 
-DET_REPOSITORY = "PaddlePaddle/PP-OCRv6_small_det_onnx"
-REC_REPOSITORY = "PaddlePaddle/PP-OCRv6_small_rec_onnx"
+class Profile:
+    def __init__(self, profile_name: str, det_url: str, rec_url: str) -> None:
+        self.profile_name = profile_name
+        self.det_url = det_url
+        self.rec_url = rec_url
+
+    @property
+    def archive_name(self) -> str:
+        return f"kdeocr-{self.profile_name}"
+
+
+def load_profiles(project_root: Path) -> dict[str, Profile]:
+    index_path = project_root.parent / "index.toml"
+    document = tomllib.loads(index_path.read_text(encoding="utf-8"))
+    profiles = document.get("profiles")
+    if not isinstance(profiles, dict):
+        raise ValueError(f"{index_path}: missing profiles table")
+    result = {}
+    for profile_name, values in profiles.items():
+        if not isinstance(profile_name, str) or not isinstance(values, dict):
+            raise ValueError(f"{index_path}: invalid profile entry")
+        try:
+            det_url = values["det"]
+            rec_url = values["rec"]
+        except KeyError as error:
+            raise ValueError(f"{index_path}: profile {profile_name} is missing {error.args[0]}") from error
+        if not isinstance(det_url, str) or not isinstance(rec_url, str):
+            raise ValueError(f"{index_path}: profile {profile_name} has invalid model URLs")
+        result[profile_name] = Profile(profile_name, det_url, rec_url)
+    return result
+
+
+def repository_id(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "huggingface.co":
+        raise ValueError(f"unsupported Hugging Face URL: {url}")
+    parts = parsed.path.strip("/").split("/")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(f"invalid Hugging Face repository URL: {url}")
+    return "/".join(parts)
 
 
 def sha256(path: Path) -> str:
@@ -71,12 +111,14 @@ def write_manifest(
     rec_hash: str,
     charset_hash: str,
     charset_count: int,
+    profile: Profile,
     det_revision: str,
     rec_revision: str,
 ) -> None:
+    base_name, revision = profile.profile_name.rsplit("-r", 1)
     manifest = f'''format = 1
-profile = "ppocrv6-small"
-revision = 1
+profile = "{base_name}"
+revision = {int(revision)}
 license = "LICENSE-PaddleOCR"
 charset = "charset.txt"
 charset_sha256 = "{charset_hash}"
@@ -115,19 +157,21 @@ def normalize_tar_info(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
-def download_models(bundle: Path) -> tuple[Path, Path, Path, str, str]:
+def download_models(profile: Profile, bundle: Path) -> tuple[Path, Path, Path, str, str]:
     det_dir = bundle / "det"
     rec_dir = bundle / "rec"
     det_dir.mkdir(parents=True, exist_ok=True)
     rec_dir.mkdir(parents=True, exist_ok=True)
 
-    det_revision = model_info(DET_REPOSITORY).sha
-    rec_revision = model_info(REC_REPOSITORY).sha
+    det_repository = repository_id(profile.det_url)
+    rec_repository = repository_id(profile.rec_url)
+    det_revision = model_info(det_repository).sha
+    rec_revision = model_info(rec_repository).sha
     if not det_revision or not rec_revision:
         raise ValueError("Hugging Face did not return model revisions")
-    det_model = Path(hf_hub_download(DET_REPOSITORY, "inference.onnx", revision=det_revision))
-    rec_model = Path(hf_hub_download(REC_REPOSITORY, "inference.onnx", revision=rec_revision))
-    rec_config = Path(hf_hub_download(REC_REPOSITORY, "inference.yml", revision=rec_revision))
+    det_model = Path(hf_hub_download(det_repository, "inference.onnx", revision=det_revision))
+    rec_model = Path(hf_hub_download(rec_repository, "inference.onnx", revision=rec_revision))
+    rec_config = Path(hf_hub_download(rec_repository, "inference.yml", revision=rec_revision))
 
     det_target = det_dir / "inference.onnx"
     rec_target = rec_dir / "inference.onnx"
@@ -136,14 +180,18 @@ def download_models(bundle: Path) -> tuple[Path, Path, Path, str, str]:
     return det_target, rec_target, rec_config, det_revision, rec_revision
 
 
-def build(args: argparse.Namespace) -> None:
+def build(args: argparse.Namespace, profiles: dict[str, Profile]) -> None:
     project_root = Path(__file__).resolve().parent
-    bundle = project_root / "temp"
+    profile = profiles[args.profile_name]
+    archive_name = profile.archive_name
+    bundle = project_root / archive_name
     license_path = project_root / "LICENSE-PaddleOCR"
     if not license_path.is_file():
         raise ValueError(f"missing {license_path}")
-    bundle.mkdir(parents=True, exist_ok=True)
-    det_model, rec_model, rec_config, det_revision, rec_revision = download_models(bundle)
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    bundle.mkdir(parents=True)
+    det_model, rec_model, rec_config, det_revision, rec_revision = download_models(profile, bundle)
 
     det_hash = sha256(det_model)
     rec_hash = sha256(rec_model)
@@ -166,23 +214,26 @@ def build(args: argparse.Namespace) -> None:
         rec_hash,
         sha256(bundle / "charset.txt"),
         len(characters),
+        profile,
         det_revision,
         rec_revision,
     )
 
     with tempfile.TemporaryDirectory(prefix="kdeocr-model-") as temporary:
-        tar_path = Path(temporary) / f"{args.archive_name}.tar"
+        tar_path = Path(temporary) / f"{archive_name}.tar"
         with tarfile.open(tar_path, "w") as archive:
             for relative in ("LICENSE-PaddleOCR", "charset.txt", "manifest.toml", "det", "rec"):
-                archive.add(bundle / relative, arcname=f"{args.archive_name}/{relative}", filter=normalize_tar_info)
-        output = project_root / f"{args.archive_name}.tar.zst"
+                archive.add(bundle / relative, arcname=f"{archive_name}/{relative}", filter=normalize_tar_info)
+        output = project_root / f"{archive_name}.tar.zst"
         subprocess.run(["zstd", "--ultra", "-22", "-T0", "-f", str(tar_path), "-o", str(output)], check=True)
 
 
 def main() -> None:
+    project_root = Path(__file__).resolve().parent
+    profiles = load_profiles(project_root)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--archive-name", default="kdeocr-ppocrv6-small-r1")
-    build(parser.parse_args())
+    parser.add_argument("-n", "--name", dest="profile_name", required=True, choices=profiles)
+    build(parser.parse_args(), profiles)
 
 
 if __name__ == "__main__":

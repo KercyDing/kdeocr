@@ -1,3 +1,5 @@
+!shell bash
+
 # Build on debug mode
 b():
     cargo build
@@ -10,9 +12,18 @@ rb(args..):
 r(args..):
     cargo run -- {{ args }}
 
-# Run with args on debug mode
-rr(args..):
-    cargo run --release -- {{ args }}
+# Build the release binary for installation
+_release_build():
+    cargo build --release
+
+# Install the local kdeocr CLI
+install() & _release_build:
+    mkdir -p "$HOME/.local/bin"
+    cp target/release/kdeocr "$HOME/.local/bin/.kdeocr-install"
+    chmod +x "$HOME/.local/bin/.kdeocr-install"
+    mv "$HOME/.local/bin/.kdeocr-install" "$HOME/.local/bin/kdeocr"
+    echo "Installed kdeocr to $HOME/.local/bin"
+    du -sh ~/.local/bin/kdeocr
 
 # Run the local CI
 ci() & check & test:
@@ -31,8 +42,18 @@ test() ? @has("cargo-nextest"):
 test():
     cargo test --all-targets --workspace
 
+# Remove build and generated model artifacts
+clean():
+    cargo clean
+    find PaddleOCR -maxdepth 1 -type d -name 'kdeocr-ppocrv6-*-r*' -exec rm -r -- {} +
+    find PaddleOCR -maxdepth 1 -type f -name 'kdeocr-ppocrv6-*-r*.tar.zst' -delete
+
 // ========================================
 [bundle]
 # Bundle small to tar.zst
 small() ? @has("uv"):
-    uv run PaddleOCR/bundle-small.py
+    uv run PaddleOCR/bundle.py --name ppocrv6-small-r1
+
+# Bundle medium to tar.zst
+medium() ? @has("uv"):
+    uv run PaddleOCR/bundle.py --name ppocrv6-medium-r1

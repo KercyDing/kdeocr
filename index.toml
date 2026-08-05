@@ -1,0 +1,15 @@
+format = 1
+
+[profiles.ppocrv6-small-r1]
+id = 1
+det = "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx"
+rec = "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx"
+url = "https://github.com/KercyDing/kdeocr/releases/download/ppocrv6-small-r1/kdeocr-ppocrv6-small-r1.tar.zst"
+sha256 = "71e3c4e4b66e0956852fd46ecfdcc401d3958f8159eca249513833997ce59258"
+
+[profiles.ppocrv6-medium-r1]
+id = 2
+det = "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx"
+rec = "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx"
+url = "https://github.com/KercyDing/kdeocr/releases/download/ppocrv6-medium-r1/kdeocr-ppocrv6-medium-r1.tar.zst"
+sha256 = "df28835edc6df9b339c74ee212d453fad3d1666666cd5d7a3fbfdec028d33ed2"
