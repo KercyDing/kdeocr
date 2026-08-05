@@ -25,6 +25,11 @@ install() & _release_build:
     echo "Installed kocr to $HOME/.local/bin"
     du -sh $(which kocr)
 
+# Uninstall the local kocr CLI
+uninstall():
+    rm -f "$HOME/.local/bin/kocr"
+    echo "Uninstalled kocr"
+
 # Run the local CI
 ci() & check & test:
     echo 'CI done.'

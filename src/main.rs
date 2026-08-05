@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("kdeocr only supports Linux.");
 
+mod keyboard;
 mod models;
 mod ocr;
 
@@ -66,6 +67,9 @@ enum CommandKind {
     /// Open the configuration file
     Config,
 
+    /// Run the global shortcut daemon
+    Daemon,
+
     /// Recognize text from an image
     Image(ocr::ImageArgs),
 
@@ -108,6 +112,9 @@ enum AppError {
     #[error("OCR failed: {0}")]
     Ocr(#[from] ocr::OcrError),
 
+    #[error("Keyboard failed: {0}")]
+    Keyboard(#[from] keyboard::KeyboardError),
+
     #[error("Output failed: {0}")]
     Output(String),
 }
@@ -132,6 +139,11 @@ fn main() -> ExitCode {
             eprintln!("\x1b[31m{error}\x1b[0m");
             ExitCode::from(EXIT_OCR)
         }
+        Err(AppError::Keyboard(error)) => {
+            let error = AppError::Keyboard(error);
+            eprintln!("\x1b[31m{error}\x1b[0m");
+            ExitCode::from(EXIT_OUTPUT)
+        }
         Err(error) => {
             eprintln!("kocr: {error}");
             ExitCode::from(error_code(&error))
@@ -150,6 +162,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
         Some(CommandKind::Use(args)) => models::use_model(&args.profile).map_err(AppError::Model),
         Some(CommandKind::Config) => models::edit_config().map_err(AppError::Config),
+        Some(CommandKind::Daemon) => keyboard::run(|| run_capture(None, true)).map_err(Into::into),
         Some(CommandKind::Image(args)) => ocr::run(args.image).map_err(AppError::Ocr),
         Some(CommandKind::Help) => print_help(),
         Some(CommandKind::Version) => {
@@ -175,7 +188,7 @@ fn error_code(error: &AppError) -> u8 {
         AppError::InvalidInput(_) | AppError::Model(_) => EXIT_INVALID_INPUT,
         AppError::Config(_) => EXIT_OUTPUT,
         AppError::Ocr(_) => EXIT_OCR,
-        AppError::Output(_) => EXIT_OUTPUT,
+        AppError::Keyboard(_) | AppError::Output(_) => EXIT_OUTPUT,
     }
 }
 
@@ -415,6 +428,12 @@ mod tests {
     fn parses_config() {
         let cli = Cli::try_parse_from(["kocr", "config"]).unwrap();
         assert!(matches!(cli.command, Some(CommandKind::Config)));
+    }
+
+    #[test]
+    fn parses_daemon() {
+        let cli = Cli::try_parse_from(["kocr", "daemon"]).unwrap();
+        assert!(matches!(cli.command, Some(CommandKind::Daemon)));
     }
 
     #[test]
