@@ -1,0 +1,233 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build, for example v0.1.0
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  validate-tag:
+    name: Validate tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$REQUESTED_TAG"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            git fetch origin "refs/tags/$tag:refs/tags/$tag"
+          fi
+          sha="$(git rev-list -n 1 "refs/tags/$tag")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag is on main
+        env:
+          RELEASE_SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
+            echo "Release tag does not point to a commit on main" >&2
+            exit 1
+          fi
+
+      - name: Wait for Check
+        uses: actions/github-script@v9
+        env:
+          RELEASE_SHA: ${{ steps.tag.outputs.sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const headSha = process.env.RELEASE_SHA;
+            const workflowName = 'Check';
+            const attemptsMax = 80;
+            const intervalMs = 15_000;
+
+            for (let attempt = 1; attempt <= attemptsMax; attempt += 1) {
+              const response = await github.rest.actions.listWorkflowRunsForRepo({
+                owner,
+                repo,
+                head_sha: headSha,
+                event: 'push',
+                per_page: 20,
+              });
+              const runs = response.data.workflow_runs.filter((run) =>
+                run.name === workflowName &&
+                run.head_sha === headSha &&
+                run.head_branch === 'main'
+              );
+
+              if (runs.some((run) =>
+                run.status === 'completed' && run.conclusion === 'success'
+              )) {
+                core.info(`Commit ${headSha} passed ${workflowName}`);
+                return;
+              }
+
+              const running = runs.some((run) => run.status !== 'completed');
+              if (runs.length > 0 && !running) {
+                const conclusions = runs
+                  .map((run) => run.conclusion ?? 'unknown')
+                  .join(', ');
+                core.setFailed(`${workflowName} failed: ${conclusions}`);
+                return;
+              }
+
+              core.info(`Waiting for ${workflowName} (${attempt}/${attemptsMax})`);
+              await new Promise((resolve) => setTimeout(resolve, intervalMs));
+            }
+
+            core.setFailed(`Timed out waiting for ${workflowName}`);
+
+      - name: Checkout release commit
+        env:
+          RELEASE_SHA: ${{ steps.tag.outputs.sha }}
+        run: git checkout --detach "$RELEASE_SHA"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate version
+        id: meta
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+
+          version="${tag#v}"
+          package_version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "kdeocr") | .version')"
+          if [[ "$version" != "$package_version" ]]; then
+            echo "Tag version $version does not match Cargo version $package_version" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$tag" == *-* ]]; then
+            prerelease=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate-tag
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - label: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Run tests
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo test --all-targets --workspace --locked --target "$TARGET"
+
+      - name: Build release binary
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Package release
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          package="kocr-${VERSION}-${TARGET}"
+          mkdir -p "dist/${package}"
+          install -m 0755 "target/${TARGET}/release/kocr" "dist/${package}/kocr"
+          install -m 0644 LICENSE README.md "dist/${package}/"
+          tar -C dist -czf "dist/${package}.tar.gz" "$package"
+          sha256sum "dist/${package}.tar.gz" > "dist/${package}.tar.gz.sha256"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/kocr-${{ needs.validate-tag.outputs.version }}-${{ matrix.target }}.tar.gz
+            dist/kocr-${{ needs.validate-tag.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [validate-tag, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: kocr v${{ needs.validate-tag.outputs.version }}
+          tag_name: ${{ needs.validate-tag.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.validate-tag.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
