@@ -1,8 +1,9 @@
-# KOCR
+# KDEOCR
 
 An offline OCR tool for KDE Plasma 6 on Wayland.
 
-KOCR can recognize an existing PNG or capture a screen region with Spectacle.
+KDEOCR can recognize an existing PNG or capture a screen region with Spectacle.
+
 Captured images or recognized text can be copied to the Wayland clipboard.
 
 ## Install
@@ -44,8 +45,7 @@ and copies it instead.
 
 ## Shortcut
 
-The installer starts a systemd user service and registers `Alt+1` as the
-default global shortcut for capture and OCR.
+The installer starts a systemd user service and registers `Alt+1` as the default global shortcut for capture and OCR.
 
 Change `shortcut` with `kocr config`. The running daemon reloads the file after it is saved. Key names follow niri syntax, such as `Alt+1`, `Mod+Shift+Slash`.
 
