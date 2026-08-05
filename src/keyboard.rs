@@ -1,4 +1,5 @@
 use std::fs;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, SyncSender};
@@ -47,6 +48,9 @@ where
     let mut shortcut = load_shortcut()?;
     let mut key = parse_shortcut(&shortcut)?;
     register(&connection, key, &shortcut)?;
+    if crate::models::selected_profile().is_err() {
+        notify_no_model();
+    }
 
     let (events_tx, events_rx) = mpsc::sync_channel(8);
     let trigger_pending = Arc::new(AtomicBool::new(false));
@@ -57,7 +61,9 @@ where
     loop {
         match events_rx.recv_timeout(POLL_INTERVAL) {
             Ok(Event::Trigger) => {
-                if let Err(error) = on_trigger() {
+                if crate::models::selected_profile().is_err() {
+                    notify_no_model();
+                } else if let Err(error) = on_trigger() {
                     eprintln!("\x1b[31mShortcut capture failed: {error}\x1b[0m");
                 }
                 trigger_pending.store(false, Ordering::Release);
@@ -208,6 +214,21 @@ fn load_shortcut() -> Result<String, KeyboardError> {
 
 fn read_config_content() -> Option<String> {
     fs::read_to_string(crate::models::config_path()).ok()
+}
+
+fn notify_no_model() {
+    const TITLE: &str = "KOCR";
+    const BODY: &str = "No OCR model available. Install one with kocr install 1.";
+
+    eprintln!("\x1b[31m{BODY}\x1b[0m");
+    match Command::new("notify-send")
+        .args(["--app-name", TITLE, TITLE, BODY])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("\x1b[31mCould not show notification: {status}\x1b[0m"),
+        Err(error) => eprintln!("\x1b[31mCould not show notification: {error}\x1b[0m"),
+    }
 }
 
 fn parse_shortcut(shortcut: &str) -> Result<i32, KeyboardError> {
