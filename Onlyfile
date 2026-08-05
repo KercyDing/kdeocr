@@ -1,0 +1,33 @@
+# Build on debug mode
+b():
+    cargo build
+
+# Build on release mode
+rb(args..):
+    cargo build --release
+
+# Run with args on debug mode
+r(args..):
+    cargo run -- {{ args }}
+
+# Run with args on debug mode
+rr(args..):
+    cargo run --release -- {{ args }}
+
+# Run the local CI
+ci() & check & test:
+    echo 'CI done.'
+
+// ========================================
+# Fmt, check and clippy
+check():
+    cargo fmt --all
+    cargo check --all-targets
+    cargo clippy --all-targets -- -D warnings
+
+# Run tests
+test() ? @has("cargo-nextest"):
+    cargo nextest run
+
+test():
+    cargo test --all-targets --workspace
