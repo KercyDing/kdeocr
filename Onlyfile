@@ -23,7 +23,7 @@ install() & _release_build:
     chmod +x "$HOME/.local/bin/.kdeocr-install"
     mv "$HOME/.local/bin/.kdeocr-install" "$HOME/.local/bin/kdeocr"
     echo "Installed kdeocr to $HOME/.local/bin"
-    du -sh ~/.local/bin/kdeocr
+    du -sh $(which kdeocr)
 
 # Run the local CI
 ci() & check & test:

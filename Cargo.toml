@@ -7,7 +7,13 @@ license = "Apache-2.0"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+comfy-table = "8"
 tempfile = "3"
+sha2 = "0.11"
+serde = { version = "1", features = ["derive"] }
+tar = "0.4"
+toml = "1"
+ruzstd = "0.9"
 thiserror = "2"
 
 [profile.release]

@@ -1,6 +1,8 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("kdeocr only supports Linux.");
 
+mod models;
+
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -28,12 +30,11 @@ const CLI_STYLES: Styles = Styles::styled()
 #[command(
     name = "kdeocr",
     version,
+    propagate_version = true,
     about = "KDE screenshot tool",
     color = clap::ColorChoice::Always,
     styles = CLI_STYLES,
-    disable_help_flag = true,
-    disable_help_subcommand = true,
-    disable_version_flag = true
+    disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -48,7 +49,11 @@ enum CommandKind {
     /// Check required dependencies
     Doctor,
 
-    /// Show this message or the help
+    /// Manage OCR models
+    Model(ModelArgs),
+
+    /// Show command help
+    #[command(name = "help", about = "Show command help")]
     Help,
 
     /// Show version
@@ -62,18 +67,27 @@ struct CaptureArgs {
     output: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+struct ModelArgs {
+    #[command(subcommand)]
+    command: models::ModelCommand,
+}
+
 #[derive(Debug, Error)]
 enum AppError {
-    #[error("capture cancelled")]
+    #[error("Capture cancelled")]
     Cancelled,
 
-    #[error("missing dependency: {0}")]
+    #[error("Missing dependency: {0}")]
     MissingDependency(String),
 
-    #[error("invalid input: {0}")]
+    #[error("Invalid input: {0}")]
     InvalidInput(String),
 
-    #[error("output failed: {0}")]
+    #[error("Model failed: {0}")]
+    Model(#[from] models::ModelError),
+
+    #[error("Output failed: {0}")]
     Output(String),
 }
 
@@ -82,6 +96,11 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::from(EXIT_OK),
         Err(AppError::Cancelled) => ExitCode::from(EXIT_CANCELLED),
+        Err(AppError::Model(error)) => {
+            let error = AppError::Model(error);
+            eprintln!("\x1b[31m{error}\x1b[0m");
+            ExitCode::from(EXIT_INVALID_INPUT)
+        }
         Err(error) => {
             eprintln!("kdeocr: {error}");
             ExitCode::from(error_code(&error))
@@ -93,6 +112,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
     match cli.command {
         Some(CommandKind::Capture(args)) => run_capture(args.output),
         Some(CommandKind::Doctor) => run_doctor(),
+        Some(CommandKind::Model(args)) => models::run(args.command).map_err(AppError::Model),
         Some(CommandKind::Help) => print_help(),
         Some(CommandKind::Version) => {
             println!("kdeocr {}", env!("CARGO_PKG_VERSION"));
@@ -114,7 +134,7 @@ fn error_code(error: &AppError) -> u8 {
     match error {
         AppError::Cancelled => EXIT_CANCELLED,
         AppError::MissingDependency(_) => EXIT_MISSING_DEPENDENCY,
-        AppError::InvalidInput(_) => EXIT_INVALID_INPUT,
+        AppError::InvalidInput(_) | AppError::Model(_) => EXIT_INVALID_INPUT,
         AppError::Output(_) => EXIT_OUTPUT,
     }
 }
@@ -223,6 +243,7 @@ fn run_doctor() -> Result<(), AppError> {
         command_check("spectacle"),
         command_check("wl-copy"),
         command_check("notify-send"),
+        command_check("curl"),
         runtime_check(),
         model_dir_check(),
     ];
