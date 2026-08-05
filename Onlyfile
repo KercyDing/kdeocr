@@ -16,14 +16,14 @@ r(args..):
 _release_build():
     cargo build --release
 
-# Install the local kdeocr CLI
+# Install the local kocr CLI
 install() & _release_build:
     mkdir -p "$HOME/.local/bin"
-    cp target/release/kdeocr "$HOME/.local/bin/.kdeocr-install"
-    chmod +x "$HOME/.local/bin/.kdeocr-install"
-    mv "$HOME/.local/bin/.kdeocr-install" "$HOME/.local/bin/kdeocr"
-    echo "Installed kdeocr to $HOME/.local/bin"
-    du -sh $(which kdeocr)
+    cp target/release/kocr "$HOME/.local/bin/.kocr-install"
+    chmod +x "$HOME/.local/bin/.kocr-install"
+    mv "$HOME/.local/bin/.kocr-install" "$HOME/.local/bin/kocr"
+    echo "Installed kocr to $HOME/.local/bin"
+    du -sh $(which kocr)
 
 # Run the local CI
 ci() & check & test:

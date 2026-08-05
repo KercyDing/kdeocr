@@ -4,10 +4,18 @@ version = "0.1.0"
 edition = "2024"
 description = "A small screenshot tool for KDE Plasma 6 on Wayland"
 license = "Apache-2.0"
+autobins = false
+
+[[bin]]
+name = "kocr"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 comfy-table = "8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+imageproc = { version = "0.27", default-features = false }
+clipper2-rust = "1.1"
 tempfile = "3"
 sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
@@ -15,9 +23,14 @@ tar = "0.4"
 toml = "1"
 ruzstd = "0.9"
 thiserror = "2"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+[build-dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"

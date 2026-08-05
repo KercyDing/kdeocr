@@ -2,6 +2,7 @@
 compile_error!("kdeocr only supports Linux.");
 
 mod models;
+mod ocr;
 
 use std::env;
 use std::fs;
@@ -18,6 +19,7 @@ const EXIT_OK: u8 = 0;
 const EXIT_CANCELLED: u8 = 2;
 const EXIT_MISSING_DEPENDENCY: u8 = 3;
 const EXIT_INVALID_INPUT: u8 = 4;
+const EXIT_OCR: u8 = 5;
 const EXIT_OUTPUT: u8 = 6;
 
 const CLI_STYLES: Styles = Styles::styled()
@@ -28,7 +30,7 @@ const CLI_STYLES: Styles = Styles::styled()
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "kdeocr",
+    name = "kocr",
     version,
     propagate_version = true,
     about = "KDE screenshot tool",
@@ -49,8 +51,23 @@ enum CommandKind {
     /// Check required dependencies
     Doctor,
 
-    /// Manage OCR models
-    Model(ModelArgs),
+    /// List available models
+    List,
+
+    /// Install a model by ID or name
+    Install(models::ProfileArgs),
+
+    /// Uninstall a model by ID or name
+    Uninstall(models::ProfileArgs),
+
+    /// Select the active OCR model
+    Use(models::ProfileArgs),
+
+    /// Open the configuration file
+    Config,
+
+    /// Recognize text from an image
+    Image(ocr::ImageArgs),
 
     /// Show command help
     #[command(name = "help", about = "Show command help")]
@@ -65,12 +82,10 @@ struct CaptureArgs {
     /// Output path (optional)
     #[arg(value_name = "PNG")]
     output: Option<PathBuf>,
-}
 
-#[derive(Debug, Args)]
-struct ModelArgs {
-    #[command(subcommand)]
-    command: models::ModelCommand,
+    /// Recognize the capture and copy text
+    #[arg(short = 'o', long = "ocr")]
+    ocr: bool,
 }
 
 #[derive(Debug, Error)]
@@ -87,6 +102,12 @@ enum AppError {
     #[error("Model failed: {0}")]
     Model(#[from] models::ModelError),
 
+    #[error("Config failed: {0}")]
+    Config(models::ModelError),
+
+    #[error("OCR failed: {0}")]
+    Ocr(#[from] ocr::OcrError),
+
     #[error("Output failed: {0}")]
     Output(String),
 }
@@ -101,8 +122,18 @@ fn main() -> ExitCode {
             eprintln!("\x1b[31m{error}\x1b[0m");
             ExitCode::from(EXIT_INVALID_INPUT)
         }
+        Err(AppError::Config(error)) => {
+            let error = AppError::Config(error);
+            eprintln!("\x1b[31m{error}\x1b[0m");
+            ExitCode::from(EXIT_OUTPUT)
+        }
+        Err(AppError::Ocr(error)) => {
+            let error = AppError::Ocr(error);
+            eprintln!("\x1b[31m{error}\x1b[0m");
+            ExitCode::from(EXIT_OCR)
+        }
         Err(error) => {
-            eprintln!("kdeocr: {error}");
+            eprintln!("kocr: {error}");
             ExitCode::from(error_code(&error))
         }
     }
@@ -110,12 +141,19 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), AppError> {
     match cli.command {
-        Some(CommandKind::Capture(args)) => run_capture(args.output),
+        Some(CommandKind::Capture(args)) => run_capture(args.output, args.ocr),
         Some(CommandKind::Doctor) => run_doctor(),
-        Some(CommandKind::Model(args)) => models::run(args.command).map_err(AppError::Model),
+        Some(CommandKind::List) => models::list().map_err(AppError::Model),
+        Some(CommandKind::Install(args)) => models::install(&args.profile).map_err(AppError::Model),
+        Some(CommandKind::Uninstall(args)) => {
+            models::uninstall(&args.profile).map_err(AppError::Model)
+        }
+        Some(CommandKind::Use(args)) => models::use_model(&args.profile).map_err(AppError::Model),
+        Some(CommandKind::Config) => models::edit_config().map_err(AppError::Config),
+        Some(CommandKind::Image(args)) => ocr::run(args.image).map_err(AppError::Ocr),
         Some(CommandKind::Help) => print_help(),
         Some(CommandKind::Version) => {
-            println!("kdeocr {}", env!("CARGO_PKG_VERSION"));
+            println!("kocr {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         None => print_help(),
@@ -135,11 +173,13 @@ fn error_code(error: &AppError) -> u8 {
         AppError::Cancelled => EXIT_CANCELLED,
         AppError::MissingDependency(_) => EXIT_MISSING_DEPENDENCY,
         AppError::InvalidInput(_) | AppError::Model(_) => EXIT_INVALID_INPUT,
+        AppError::Config(_) => EXIT_OUTPUT,
+        AppError::Ocr(_) => EXIT_OCR,
         AppError::Output(_) => EXIT_OUTPUT,
     }
 }
 
-fn run_capture(output: Option<PathBuf>) -> Result<(), AppError> {
+fn run_capture(output: Option<PathBuf>, recognize: bool) -> Result<(), AppError> {
     let spectacle = require_command("spectacle")?;
     let temp_dir = TempDir::new().map_err(|error| {
         AppError::Output(format!("could not create temporary directory: {error}"))
@@ -175,7 +215,13 @@ fn run_capture(output: Option<PathBuf>) -> Result<(), AppError> {
     })?;
     validate_png(&png)?;
 
-    copy_png(&png)?;
+    if recognize {
+        let text = ocr::recognize(capture_path)?;
+        copy_text(&text)?;
+        println!("{text}");
+    } else {
+        copy_png(&png)?;
+    }
     if let Some(path) = output {
         println!("{}", path.display());
     }
@@ -213,9 +259,17 @@ fn validate_png(bytes: &[u8]) -> Result<(), AppError> {
 }
 
 fn copy_png(png: &[u8]) -> Result<(), AppError> {
+    copy_clipboard(png, "image/png")
+}
+
+fn copy_text(text: &str) -> Result<(), AppError> {
+    copy_clipboard(text.as_bytes(), "text/plain;charset=utf-8")
+}
+
+fn copy_clipboard(content: &[u8], mime: &str) -> Result<(), AppError> {
     let wl_copy = require_command("wl-copy")?;
     let mut child = Command::new(wl_copy)
-        .args(["--type", "image/png"])
+        .args(["--type", mime])
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|error| AppError::Output(format!("could not start wl-copy: {error}")))?;
@@ -225,7 +279,7 @@ fn copy_png(png: &[u8]) -> Result<(), AppError> {
         .take()
         .ok_or_else(|| AppError::Output("wl-copy stdin was not available".to_owned()))?;
     stdin
-        .write_all(png)
+        .write_all(content)
         .map_err(|error| AppError::Output(format!("could not write to wl-copy: {error}")))?;
     drop(stdin);
 
@@ -339,7 +393,8 @@ fn find_command(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{spectacle_args, validate_png};
+    use super::{Cli, CommandKind, spectacle_args, validate_png};
+    use clap::Parser;
 
     #[test]
     fn accepts_png() {
@@ -354,5 +409,26 @@ mod tests {
     #[test]
     fn uses_release_capture() {
         assert!(spectacle_args().contains(&"--release-capture"));
+    }
+
+    #[test]
+    fn parses_config() {
+        let cli = Cli::try_parse_from(["kocr", "config"]).unwrap();
+        assert!(matches!(cli.command, Some(CommandKind::Config)));
+    }
+
+    #[test]
+    fn parses_capture_ocr() {
+        let cli = Cli::try_parse_from(["kocr", "capture", "-o"]).unwrap();
+        let Some(CommandKind::Capture(args)) = cli.command else {
+            panic!("expected capture command");
+        };
+        assert!(args.ocr);
+    }
+
+    #[test]
+    fn parses_image() {
+        let cli = Cli::try_parse_from(["kocr", "image", "image.png"]).unwrap();
+        assert!(matches!(cli.command, Some(CommandKind::Image(_))));
     }
 }
