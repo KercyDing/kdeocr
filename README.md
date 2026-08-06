@@ -15,6 +15,14 @@ Requires:
 - `Spectacle`, `wl-copy`, ONNX Runtime
 - `curl` (for model installation)
 
+Install ONNX Runtime:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/KercyDing/kdeocr/main/onnxruntime.sh)"
+```
+
+The script installs `onnxruntime-cpu` from the repository on Arch Linux and CachyOS. On Debian, Ubuntu, Fedora, RHEL, and compatible distributions, it installs the official ONNX Runtime 1.28.0 CPU archive.
+
 ## Usage
 
 ### Screen Capture
