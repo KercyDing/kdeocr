@@ -162,7 +162,9 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
         Some(CommandKind::Use(args)) => models::use_model(&args.profile).map_err(AppError::Model),
         Some(CommandKind::Config) => models::edit_config().map_err(AppError::Config),
-        Some(CommandKind::Daemon) => keyboard::run(|| run_capture(None, true)).map_err(Into::into),
+        Some(CommandKind::Daemon) => {
+            keyboard::run(|recognize| run_capture(None, recognize)).map_err(Into::into)
+        }
         Some(CommandKind::Image(args)) => ocr::run(args.image).map_err(AppError::Ocr),
         Some(CommandKind::Help) => print_help(),
         Some(CommandKind::Version) => {

@@ -14,7 +14,8 @@ const BUS_NAME: &str = "io.github.KercyDing.kocr";
 const SERVICE: &str = "org.kde.kglobalaccel";
 const SERVICE_PATH: &str = "/kglobalaccel";
 const COMPONENT: &str = "kocr";
-const ACTION: &str = "capture-ocr";
+const COPY_ACTION: &str = "copy";
+const OCR_ACTION: &str = "capture-ocr";
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SET_PRESENT_NO_AUTOLOAD: u32 = 2 | 4;
 
@@ -30,13 +31,31 @@ pub(crate) enum KeyboardError {
 }
 
 enum Event {
-    Trigger,
+    Trigger(Trigger),
     Reregister,
+}
+
+#[derive(Clone, Copy)]
+enum Trigger {
+    Copy,
+    Ocr,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Binding {
+    name: String,
+    key: i32,
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
+struct Bindings {
+    copy: Option<Binding>,
+    ocr: Option<Binding>,
 }
 
 pub(crate) fn run<F, E>(mut on_trigger: F) -> Result<(), KeyboardError>
 where
-    F: FnMut() -> Result<(), E>,
+    F: FnMut(bool) -> Result<(), E>,
     E: std::fmt::Display,
 {
     let connection = Connection::session()
@@ -45,9 +64,8 @@ where
         .request_name(BUS_NAME)
         .map_err(|error| operation("another daemon is already running", error))?;
 
-    let mut shortcut = load_shortcut()?;
-    let mut key = parse_shortcut(&shortcut)?;
-    register(&connection, key, &shortcut)?;
+    let mut bindings = load_bindings()?;
+    register(&connection, &bindings)?;
     if crate::models::selected_profile().is_err() {
         notify_no_model();
     }
@@ -57,19 +75,19 @@ where
     spawn_listener(connection.clone(), events_tx, Arc::clone(&trigger_pending));
 
     let mut config_content = read_config_content();
-    eprintln!("Shortcut daemon started: {shortcut}");
+    eprintln!("Shortcut daemon started");
     loop {
         match events_rx.recv_timeout(POLL_INTERVAL) {
-            Ok(Event::Trigger) => {
+            Ok(Event::Trigger(trigger)) => {
                 if crate::models::selected_profile().is_err() {
                     notify_no_model();
-                } else if let Err(error) = on_trigger() {
+                } else if let Err(error) = on_trigger(matches!(trigger, Trigger::Ocr)) {
                     eprintln!("\x1b[31mShortcut capture failed: {error}\x1b[0m");
                 }
                 trigger_pending.store(false, Ordering::Release);
             }
             Ok(Event::Reregister) => {
-                if let Err(error) = register(&connection, key, &shortcut) {
+                if let Err(error) = register(&connection, &bindings) {
                     eprintln!("\x1b[31mShortcut registration failed: {error}\x1b[0m");
                 }
             }
@@ -80,15 +98,14 @@ where
                 ));
             }
         }
-        reload_config(&connection, &mut config_content, &mut shortcut, &mut key);
+        reload_config(&connection, &mut config_content, &mut bindings);
     }
 }
 
 fn reload_config(
     connection: &Connection,
     previous_content: &mut Option<String>,
-    current_shortcut: &mut String,
-    current_key: &mut i32,
+    current_bindings: &mut Bindings,
 ) {
     let content = read_config_content();
     if content == *previous_content {
@@ -96,33 +113,24 @@ fn reload_config(
     }
     *previous_content = content;
 
-    let shortcut = match load_shortcut() {
-        Ok(shortcut) => shortcut,
+    let bindings = match load_bindings() {
+        Ok(bindings) => bindings,
         Err(error) => {
             eprintln!("\x1b[31mShortcut reload failed: {error}\x1b[0m");
             return;
         }
     };
-    let key = match parse_shortcut(&shortcut) {
-        Ok(key) => key,
-        Err(error) => {
-            eprintln!("\x1b[31mShortcut reload failed: {error}\x1b[0m");
-            return;
-        }
-    };
-    if key == *current_key {
-        *current_shortcut = shortcut;
+    if bindings == *current_bindings {
         return;
     }
-    match register(connection, key, &shortcut) {
+    match register(connection, &bindings) {
         Ok(()) => {
-            *current_shortcut = shortcut;
-            *current_key = key;
-            eprintln!("Shortcut reloaded: {current_shortcut}");
+            *current_bindings = bindings;
+            eprintln!("Shortcuts reloaded");
         }
         Err(error) => {
             eprintln!("\x1b[31mShortcut reload failed: {error}\x1b[0m");
-            let _ = register(connection, *current_key, current_shortcut);
+            let _ = register(connection, current_bindings);
         }
     }
 }
@@ -158,10 +166,14 @@ fn listen(
         else {
             continue;
         };
+        let trigger = match action.as_str() {
+            COPY_ACTION => Trigger::Copy,
+            OCR_ACTION => Trigger::Ocr,
+            _ => continue,
+        };
         if component == COMPONENT
-            && action == ACTION
             && !trigger_pending.swap(true, Ordering::AcqRel)
-            && events.try_send(Event::Trigger).is_err()
+            && events.try_send(Event::Trigger(trigger)).is_err()
         {
             trigger_pending.store(false, Ordering::Release);
         }
@@ -169,19 +181,44 @@ fn listen(
     Ok(())
 }
 
-fn register(connection: &Connection, key: i32, shortcut: &str) -> Result<(), KeyboardError> {
+fn register(connection: &Connection, bindings: &Bindings) -> Result<(), KeyboardError> {
     let proxy = service_proxy(connection)?;
-    let action = action_id();
+    register_action(
+        &proxy,
+        COPY_ACTION,
+        "Capture and copy screenshot",
+        bindings.copy.as_ref(),
+    )?;
+    register_action(
+        &proxy,
+        OCR_ACTION,
+        "Capture screenshot and recognize text",
+        bindings.ocr.as_ref(),
+    )
+}
+
+fn register_action(
+    proxy: &Proxy<'static>,
+    action_name: &str,
+    description: &str,
+    binding: Option<&Binding>,
+) -> Result<(), KeyboardError> {
+    let action = action_id(action_name, description);
     let _: () = proxy
         .call("doRegister", &(action.clone(),))
         .map_err(|error| operation("could not register shortcut action", error))?;
-    let keys = vec![(vec![key, 0, 0, 0],)];
+    let keys = binding
+        .map(|binding| vec![(vec![binding.key, 0, 0, 0],)])
+        .unwrap_or_default();
     let assigned: Vec<(Vec<i32>,)> = proxy
         .call("setShortcutKeys", &(action, keys, SET_PRESENT_NO_AUTOLOAD))
         .map_err(|error| operation("could not set global shortcut", error))?;
-    if !assigned.iter().any(|(keys,)| keys.contains(&key)) {
+    if let Some(binding) = binding
+        && !assigned.iter().any(|(keys,)| keys.contains(&binding.key))
+    {
         return Err(KeyboardError::Operation(format!(
-            "shortcut is unavailable: {shortcut}"
+            "shortcut is unavailable: {}",
+            binding.name
         )));
     }
     Ok(())
@@ -200,16 +237,28 @@ fn component_proxy(connection: &Connection) -> Result<Proxy<'static>, KeyboardEr
         .map_err(|error| operation("could not connect to shortcut component", error))
 }
 
-fn action_id() -> Vec<String> {
-    [COMPONENT, ACTION, "KOCR", "Capture and recognize text"]
+fn action_id(action: &str, description: &str) -> Vec<String> {
+    [COMPONENT, action, "KOCR", description]
         .map(str::to_owned)
         .to_vec()
 }
 
-fn load_shortcut() -> Result<String, KeyboardError> {
-    crate::models::shortcut().map_err(|error| {
+fn load_bindings() -> Result<Bindings, KeyboardError> {
+    let shortcuts = crate::models::shortcuts().map_err(|error| {
         KeyboardError::Operation(format!("could not load shortcut configuration: {error}"))
-    })
+    })?;
+    let copy = parse_binding(shortcuts.copy)?;
+    let ocr = parse_binding(shortcuts.ocr)?;
+    Ok(Bindings { copy, ocr })
+}
+
+fn parse_binding(shortcut: Option<String>) -> Result<Option<Binding>, KeyboardError> {
+    shortcut
+        .map(|name| {
+            let key = parse_shortcut(&name)?;
+            Ok(Binding { name, key })
+        })
+        .transpose()
 }
 
 fn read_config_content() -> Option<String> {
@@ -335,7 +384,7 @@ fn operation(context: &str, error: impl std::fmt::Display) -> KeyboardError {
 
 #[cfg(test)]
 mod tests {
-    use super::{QT_ALT, QT_META, QT_SHIFT, parse_shortcut};
+    use super::{QT_ALT, QT_META, QT_SHIFT, parse_binding, parse_shortcut};
 
     #[test]
     fn parses_shortcut() {
@@ -345,5 +394,10 @@ mod tests {
             QT_META | QT_SHIFT | '/' as i32
         );
         assert!(parse_shortcut("Alt+Alt+1").is_err());
+    }
+
+    #[test]
+    fn accepts_disabled_binding() {
+        assert!(parse_binding(None).unwrap().is_none());
     }
 }

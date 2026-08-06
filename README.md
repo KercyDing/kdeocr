@@ -1,75 +1,80 @@
 # KDEOCR
 
-An offline OCR tool for KDE Plasma 6 on Wayland.
+Offline OCR for KDE Plasma 6 on Wayland.
 
-KDEOCR can recognize an existing PNG or capture a screen region with Spectacle.
+Recognize text from existing images or capture a screen region with Spectacle. Results are copied directly to the Wayland clipboard.
 
-Captured images or recognized text can be copied to the Wayland clipboard.
+## Installation
 
-## Install
-
-```text
+```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/KercyDing/kdeocr/main/script.sh)"
 ```
 
-## Requirements
-
+Requires:
 - Linux with KDE Plasma 6 on Wayland
-- `Spectacle` and `wl-copy`
-- ONNX Runtime
-- `curl` for model installation
+- `Spectacle`, `wl-copy`, ONNX Runtime
+- `curl` (for model installation)
 
-## Capture
+## Usage
 
-```text
-kocr capture
-kocr capture -o
+### Screen Capture
+
+```bash
+kocr capture          # Capture region, copy PNG to clipboard
+kocr capture -o       # Capture region, run OCR, copy text to clipboard
 ```
 
-The default command copies the captured PNG. `-o` runs OCR, prints the text,
-and copies it instead.
+### Existing Image
 
-## Shortcut
-
-The installer starts a systemd user service and registers `Alt+1` as the default global shortcut for capture and OCR.
-
-Change `shortcut` with `kocr config`. The running daemon reloads the file after it is saved. Key names follow niri syntax, such as `Alt+1`, `Mod+Shift+Slash`.
-
-## Image
-
-Recognize an existing PNG and print the text:
-
-```text
-kocr image test.png
+```bash
+kocr image test.png   # Recognize text and print to stdout
 ```
 
-## Models
+### OCR Models
 
-Manage OCR models by ID or name:
-
-```text
-kocr list
-kocr install 1
-kocr use 1
-kocr uninstall 1
-kocr config
+```bash
+kocr list             # List available models
+kocr install 1        # Install by ID or name
+kocr use 1            # Set active model
+kocr uninstall 1      # Remove a model
+kocr config           # Open configuration in your default editor
 ```
 
-`kocr config` opens `~/.config/kdeocr/config.toml` in the editor selected by
-`VISUAL`, `EDITOR`, or the desktop default editor.
+## Keyboard Shortcuts
 
-The file records the selected model and installed model paths:
+The installer registers a systemd user service with two default shortcuts:
+
+| Shortcut | Action |
+|----------|--------|
+| `Alt+1`  | Capture and copy PNG |
+| `Alt+2`  | Capture, OCR, and copy text |
+
+Change shortcuts with `kocr config`. The daemon reloads the configuration automatically on save.
+
+## Configuration
+
+`kocr config` opens `~/.config/kdeocr/config.toml` in the editor specified by `VISUAL`, `EDITOR`, or the desktop default.
+
+Example:
 
 ```toml
-shortcut = "Alt+1"
-model = "ppocrv6-small-r1"
+[shortcut]
+copy = "Alt+1"
+ocr  = "Alt+2"
+
+[models]
+select = "ppocrv6-small-r1"
 
 [models.ppocrv6-small-r1]
 path = "/home/user/.local/share/kdeocr/models/ppocrv6-small-r1"
 ```
 
+Supported modifiers: `Mod`, `Ctrl`, `Alt`, `Shift`.  
+Key examples: `A-Z`, `0-9`, `F1-F35`, `Escape`, `Space`, `Slash`.  
+Set a shortcut to an empty string to disable it.
+
 ## License
 
 [Apache License 2.0](LICENSE)
 
-Third-party notices are in [NOTICE](NOTICE).
+Third-party notices: [NOTICE](NOTICE)

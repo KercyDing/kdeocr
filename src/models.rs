@@ -21,36 +21,63 @@ pub(crate) use r#use::run as use_model;
 include!(concat!(env!("OUT_DIR"), "/model_index.rs"));
 
 const CONFIG_FILE: &str = "kdeocr/config.toml";
-const DEFAULT_SHORTCUT: &str = "Alt+1";
+const DEFAULT_COPY_SHORTCUT: &str = "Alt+1";
+const DEFAULT_OCR_SHORTCUT: &str = "Alt+2";
+const CONFIG_COMMENTS: &str = "# Supported modifiers: Mod, Ctrl, Alt, Shift.\n# Key examples: A-Z, 0-9, F1-F35, Escape, Space, Slash.\n# Set a shortcut to an empty string to disable it.\n\n";
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
-struct ModelConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    shortcut: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(default)]
-    models: BTreeMap<String, InstalledModel>,
-    #[serde(flatten)]
-    extra: BTreeMap<String, toml::Value>,
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct ShortcutConfig {
+    #[serde(
+        default = "default_copy_shortcut",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) copy: Option<String>,
+    #[serde(
+        default = "default_ocr_shortcut",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) ocr: Option<String>,
 }
 
-impl Default for ModelConfig {
+fn default_copy_shortcut() -> Option<String> {
+    Some(DEFAULT_COPY_SHORTCUT.to_owned())
+}
+
+fn default_ocr_shortcut() -> Option<String> {
+    Some(DEFAULT_OCR_SHORTCUT.to_owned())
+}
+
+impl Default for ShortcutConfig {
     fn default() -> Self {
         Self {
-            shortcut: Some(DEFAULT_SHORTCUT.to_owned()),
-            model: None,
-            models: BTreeMap::new(),
-            extra: BTreeMap::new(),
+            copy: default_copy_shortcut(),
+            ocr: default_ocr_shortcut(),
         }
     }
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+struct ModelConfig {
+    #[serde(default)]
+    shortcut: ShortcutConfig,
+    #[serde(default)]
+    models: ModelsConfig,
+    #[serde(flatten)]
+    extra: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
+struct ModelsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    select: Option<String>,
+    #[serde(flatten)]
+    installed: BTreeMap<String, InstalledModel>,
+}
+
 impl ModelConfig {
     fn is_empty(&self) -> bool {
-        self.shortcut.is_none()
-            && self.model.is_none()
-            && self.models.is_empty()
+        self.shortcut == ShortcutConfig::default()
+            && self.models == ModelsConfig::default()
             && self.extra.is_empty()
     }
 }
@@ -127,11 +154,12 @@ pub(crate) fn selected_profile() -> Result<String, ModelError> {
         .ok_or_else(|| ModelError::Operation("no model profile is installed".to_owned()))
 }
 
-pub(crate) fn shortcut() -> Result<String, ModelError> {
+pub(crate) fn shortcuts() -> Result<ShortcutConfig, ModelError> {
     sync_config()?;
-    read_model_config()?
-        .shortcut
-        .ok_or_else(|| ModelError::Operation("shortcut is missing from config".to_owned()))
+    let mut shortcuts = read_model_config()?.shortcut;
+    shortcuts.copy = non_empty(shortcuts.copy);
+    shortcuts.ocr = non_empty(shortcuts.ocr);
+    Ok(shortcuts)
 }
 
 pub(crate) fn model_path(name: &str) -> PathBuf {
@@ -181,7 +209,7 @@ pub(crate) fn config_path() -> PathBuf {
 }
 
 pub(crate) fn read_config() -> Result<Option<String>, ModelError> {
-    Ok(read_model_config()?.model)
+    Ok(read_model_config()?.models.select)
 }
 
 pub(crate) fn sync_config() -> Result<(), ModelError> {
@@ -190,10 +218,6 @@ pub(crate) fn sync_config() -> Result<(), ModelError> {
     let had_config = path.is_file();
     let mut config = read_model_config()?;
     let installed = installed_profiles(&index);
-    let shortcut = config
-        .shortcut
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SHORTCUT.to_owned());
     let models = installed
         .iter()
         .map(|name| {
@@ -205,19 +229,20 @@ pub(crate) fn sync_config() -> Result<(), ModelError> {
             )
         })
         .collect();
-    let model = config
-        .model
+    let select = config
+        .models
+        .select
         .as_ref()
         .filter(|name| installed.iter().any(|installed| installed == *name))
         .cloned()
         .or_else(|| installed.first().cloned());
-    let changed = config.shortcut.as_deref() != Some(&shortcut)
-        || config.model != model
-        || config.models != models;
-    config.shortcut = Some(shortcut);
-    config.model = model;
-    config.models = models;
-    if changed && (had_config || !config.models.is_empty()) {
+    let updated_models = ModelsConfig {
+        select,
+        installed: models,
+    };
+    let changed = config.models != updated_models;
+    config.models = updated_models;
+    if changed && (had_config || !config.models.installed.is_empty()) {
         save_config(&config)?;
     }
     Ok(())
@@ -238,8 +263,8 @@ pub(crate) fn write_config(name: &str) -> Result<(), ModelError> {
     let index = load_index()?;
     let installed = installed_profiles(&index);
     let mut config = read_model_config()?;
-    config.model = Some(name.to_owned());
-    config.models = installed
+    config.models.select = Some(name.to_owned());
+    config.models.installed = installed
         .iter()
         .map(|name| {
             (
@@ -259,9 +284,9 @@ pub(crate) fn remove_config(name: &str) -> Result<(), ModelError> {
         return Ok(());
     }
     let mut config = read_model_config()?;
-    config.models.remove(name);
-    if config.model.as_deref() == Some(name) {
-        config.model = None;
+    config.models.installed.remove(name);
+    if config.models.select.as_deref() == Some(name) {
+        config.models.select = None;
     }
     if config.is_empty() {
         fs::remove_file(path).map_err(|error| {
@@ -284,7 +309,7 @@ fn save_config(config: &ModelConfig) -> Result<(), ModelError> {
         .map_err(|error| ModelError::Operation(format!("could not create config file: {error}")))?;
     let content = toml::to_string_pretty(config)
         .map_err(|error| ModelError::Operation(format!("could not serialize config: {error}")))?;
-    fs::write(temporary.path(), content)
+    fs::write(temporary.path(), format!("{CONFIG_COMMENTS}{content}"))
         .map_err(|error| ModelError::Operation(format!("could not write config: {error}")))?;
     temporary
         .persist(&path)
@@ -359,11 +384,17 @@ fn find_command(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{InstalledModel, ModelConfig, model_index, resolve_profile};
+    use super::{
+        InstalledModel, ModelConfig, ModelsConfig, ShortcutConfig, model_index, resolve_profile,
+    };
 
     #[test]
     fn resolves_id() {
@@ -382,28 +413,34 @@ mod tests {
     #[test]
     fn serializes_config() {
         let config = ModelConfig {
-            shortcut: Some("Alt+1".to_owned()),
-            model: Some("ppocrv6-small-r1".to_owned()),
-            models: BTreeMap::from([(
-                "ppocrv6-small-r1".to_owned(),
-                InstalledModel {
-                    path: "/models/ppocrv6-small-r1".to_owned(),
-                },
-            )]),
+            shortcut: ShortcutConfig {
+                copy: Some("Alt+1".to_owned()),
+                ocr: Some("Alt+2".to_owned()),
+            },
+            models: ModelsConfig {
+                select: Some("ppocrv6-small-r1".to_owned()),
+                installed: BTreeMap::from([(
+                    "ppocrv6-small-r1".to_owned(),
+                    InstalledModel {
+                        path: "/models/ppocrv6-small-r1".to_owned(),
+                    },
+                )]),
+            },
             extra: BTreeMap::new(),
         };
         let content = toml::to_string_pretty(&config).unwrap();
 
         assert_eq!(
             content,
-            "shortcut = \"Alt+1\"\nmodel = \"ppocrv6-small-r1\"\n\n[models.ppocrv6-small-r1]\npath = \"/models/ppocrv6-small-r1\"\n"
+            "[shortcut]\ncopy = \"Alt+1\"\nocr = \"Alt+2\"\n\n[models]\nselect = \"ppocrv6-small-r1\"\n\n[models.ppocrv6-small-r1]\npath = \"/models/ppocrv6-small-r1\"\n"
         );
     }
 
     #[test]
     fn preserves_extra_config() {
         let config: ModelConfig =
-            toml::from_str("model = \"ppocrv6-small-r1\"\n\n[ocr]\nthreshold = 0.5\n").unwrap();
+            toml::from_str("[models]\nselect = \"ppocrv6-small-r1\"\n\n[ocr]\nthreshold = 0.5\n")
+                .unwrap();
         let content = toml::to_string_pretty(&config).unwrap();
 
         assert!(content.contains("ocr"));
@@ -411,7 +448,13 @@ mod tests {
     }
 
     #[test]
-    fn keeps_shortcut_config() {
-        assert!(!ModelConfig::default().is_empty());
+    fn defaults_shortcuts() {
+        assert_eq!(
+            ModelConfig::default().shortcut,
+            ShortcutConfig {
+                copy: Some("Alt+1".to_owned()),
+                ocr: Some("Alt+2".to_owned()),
+            }
+        );
     }
 }

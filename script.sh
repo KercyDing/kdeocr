@@ -158,7 +158,7 @@ EOF
 
     echo "Installed kocr to $binary_path"
     echo "Model: $model"
-    echo "Shortcut: Alt+1"
+    echo "Shortcuts: Alt+1 (copy), Alt+2 (OCR)"
 }
 
 uninstall_kocr() {
