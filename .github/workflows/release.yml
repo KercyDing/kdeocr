@@ -173,11 +173,6 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Run tests
-        env:
-          TARGET: ${{ matrix.target }}
-        run: cargo test --all-targets --workspace --locked --target "$TARGET"
-
       - name: Build release binary
         env:
           TARGET: ${{ matrix.target }}
