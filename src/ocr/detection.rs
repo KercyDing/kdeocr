@@ -187,7 +187,9 @@ pub(crate) fn postprocess(
             .iter()
             .map(|point| Point::new(point.x as f32, point.y as f32))
             .collect::<Vec<_>>();
-        let mini_box = min_area_rect(&points);
+        let Some(mini_box) = min_area_box(points) else {
+            continue;
+        };
         let side = min_side(&mini_box);
         if side < 3.0 {
             continue;
@@ -199,21 +201,40 @@ pub(crate) fn postprocess(
         let Some(expanded) = unclip(&mini_box) else {
             continue;
         };
-        let expanded_box = min_area_rect(&expanded);
+        let Some(expanded_box) = min_area_box(expanded) else {
+            continue;
+        };
         if min_side(&expanded_box) < 5.0 {
             continue;
         }
         boxes.push(map_quad(expanded_box, geometry));
     }
-    boxes.sort_by(|left, right| {
-        let tolerance = left.bounds.height().min(right.bounds.height()) / 2;
-        if left.bounds.top.abs_diff(right.bounds.top) <= tolerance {
-            left.bounds.left.cmp(&right.bounds.left)
-        } else {
-            left.bounds.top.cmp(&right.bounds.top)
-        }
-    });
+    sort_boxes(&mut boxes);
     boxes
+}
+
+fn sort_boxes(boxes: &mut [TextBox]) {
+    boxes.sort_by_key(|text_box| (text_box.bounds.top, text_box.bounds.left));
+}
+
+fn min_area_box(points: Vec<Point<f32>>) -> Option<[Point<f32>; 4]> {
+    const COORDINATE_LIMIT: f32 = 1_000_000.0;
+
+    let mut pixels = Vec::with_capacity(points.len());
+    for point in points {
+        if !point.x.is_finite()
+            || !point.y.is_finite()
+            || point.x.abs() > COORDINATE_LIMIT
+            || point.y.abs() > COORDINATE_LIMIT
+        {
+            return None;
+        }
+        pixels.push(Point::new(point.x.round() as i32, point.y.round() as i32));
+    }
+    pixels.sort_by_key(|point| (point.x, point.y));
+    pixels.dedup();
+    (pixels.len() >= 3)
+        .then(|| min_area_rect(&pixels).map(|point| Point::new(point.x as f32, point.y as f32)))
 }
 
 fn round_up(value: u32, multiple: u32) -> u32 {
@@ -381,7 +402,8 @@ mod tests {
     use imageproc::point::Point;
 
     use super::{
-        Geometry, Rect, TextBox, group_lines, map_quad, polygon_score, separated_prefix, unclip,
+        Geometry, Rect, TextBox, group_lines, map_quad, min_area_box, polygon_score,
+        separated_prefix, sort_boxes, unclip,
     };
 
     #[test]
@@ -394,6 +416,74 @@ mod tests {
             Point::new(1.0, 3.0),
         ];
         assert_eq!(polygon_score(&values, 4, 4, &polygon), 1.0);
+    }
+
+    #[test]
+    fn sorts_boxes() {
+        let mut boxes = [
+            TextBox {
+                points: [Point::new(0.0, 0.0); 4],
+                bounds: Rect {
+                    left: 20,
+                    right: 30,
+                    top: 0,
+                    bottom: 10,
+                },
+            },
+            TextBox {
+                points: [Point::new(0.0, 0.0); 4],
+                bounds: Rect {
+                    left: 10,
+                    right: 20,
+                    top: 5,
+                    bottom: 15,
+                },
+            },
+            TextBox {
+                points: [Point::new(0.0, 0.0); 4],
+                bounds: Rect {
+                    left: 0,
+                    right: 10,
+                    top: 10,
+                    bottom: 20,
+                },
+            },
+        ];
+
+        sort_boxes(&mut boxes);
+        assert_eq!(
+            boxes
+                .iter()
+                .map(|text_box| text_box.bounds.top)
+                .collect::<Vec<_>>(),
+            vec![0, 5, 10]
+        );
+    }
+
+    #[test]
+    fn handles_duplicate_points() {
+        let points = vec![
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+            Point::new(10.0, 0.0),
+        ];
+
+        let bounds = min_area_box(points).expect("box should be valid");
+        assert_eq!(bounds[0], Point::new(0.0, 0.0));
+        assert_eq!(bounds[2], Point::new(10.0, 10.0));
+    }
+
+    #[test]
+    fn rejects_invalid_points() {
+        let points = vec![
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(f32::NAN, 10.0),
+        ];
+
+        assert!(min_area_box(points).is_none());
     }
 
     #[test]
