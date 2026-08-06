@@ -125,8 +125,7 @@ install_kocr() {
     mkdir -p -- "$install_dir" "$unit_dir"
     install -m 0755 "$source_binary" "$temporary_dir/kocr"
     mv -f -- "$temporary_dir/kocr" "$binary_path"
-    model_dir=${XDG_DATA_HOME:-"$HOME/.local/share"}/kdeocr/models/$model
-    if [[ ! -f $model_dir/manifest.toml ]]; then
+    if ! "$binary_path" use "$model" >/dev/null 2>&1; then
         "$binary_path" install "$model"
     fi
     "$binary_path" use "$model"

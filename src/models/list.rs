@@ -23,7 +23,7 @@ pub(crate) fn run() -> Result<(), ModelError> {
         .unwrap_or(1)
         + 1;
     for (name, profile) in profiles {
-        let path = model_path(name);
+        let path = model_path(name)?;
         let id = if active.as_deref() == Some(name.as_str()) {
             format!("*{:>width$}", profile.id, width = id_width - 1)
         } else {

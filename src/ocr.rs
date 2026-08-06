@@ -51,7 +51,8 @@ pub fn recognize(image_path: PathBuf) -> Result<String, OcrError> {
     crate::models::sync_config().map_err(|error| OcrError::ModelSelection(error.to_string()))?;
     let profile = crate::models::selected_profile()
         .map_err(|error| OcrError::ModelSelection(error.to_string()))?;
-    let model_dir = crate::models::model_path(&profile);
+    let model_dir = crate::models::model_path(&profile)
+        .map_err(|error| OcrError::ModelSelection(error.to_string()))?;
     if !model_dir.is_dir() {
         return Err(OcrError::ModelNotInstalled(model_dir));
     }

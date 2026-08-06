@@ -35,10 +35,13 @@ kocr image test.png   # Recognize text and print to stdout
 ```bash
 kocr list             # List available models
 kocr install 1        # Install by ID or name
+kocr install 1 -p ~/<path>/ppocrv6-small-r1
 kocr use 1            # Set active model
 kocr uninstall 1      # Remove a model
 kocr config           # Open configuration in your default editor
 ```
+
+`--path` (`-p`) sets the complete model directory and stores its absolute path in `config.toml`.
 
 ## Keyboard Shortcuts
 

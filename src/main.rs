@@ -56,7 +56,7 @@ enum CommandKind {
     List,
 
     /// Install a model by ID or name
-    Install(models::ProfileArgs),
+    Install(models::InstallArgs),
 
     /// Uninstall a model by ID or name
     Uninstall(models::ProfileArgs),
@@ -156,7 +156,9 @@ fn run(cli: Cli) -> Result<(), AppError> {
         Some(CommandKind::Capture(args)) => run_capture(args.output, args.ocr),
         Some(CommandKind::Doctor) => run_doctor(),
         Some(CommandKind::List) => models::list().map_err(AppError::Model),
-        Some(CommandKind::Install(args)) => models::install(&args.profile).map_err(AppError::Model),
+        Some(CommandKind::Install(args)) => {
+            models::install(&args.profile, args.path.as_deref()).map_err(AppError::Model)
+        }
         Some(CommandKind::Uninstall(args)) => {
             models::uninstall(&args.profile).map_err(AppError::Model)
         }
@@ -408,6 +410,8 @@ fn find_command(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{Cli, CommandKind, spectacle_args, validate_png};
     use clap::Parser;
 
@@ -445,6 +449,16 @@ mod tests {
             panic!("expected capture command");
         };
         assert!(args.ocr);
+    }
+
+    #[test]
+    fn parses_install_path() {
+        let cli = Cli::try_parse_from(["kocr", "install", "1", "-p", "/models/ppocrv6-small-r1"])
+            .unwrap();
+        let Some(CommandKind::Install(args)) = cli.command else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.path, Some(PathBuf::from("/models/ppocrv6-small-r1")));
     }
 
     #[test]

@@ -10,7 +10,7 @@ pub(crate) fn run(selector: &str) -> Result<(), ModelError> {
     let index = load_index()?;
     let (name, profile) = resolve_profile(&index, selector)?;
     let was_active = selected_profile()? == name;
-    let path = model_path(name);
+    let path = model_path(name)?;
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
         ModelError::Operation(format!("model profile is not installed: {error}"))
     })?;
@@ -31,7 +31,7 @@ pub(crate) fn run(selector: &str) -> Result<(), ModelError> {
     })?;
     remove_config(name)?;
     if was_active {
-        let installed = installed_profiles(&index);
+        let installed = installed_profiles(&index)?;
         let next = installed
             .iter()
             .find(|candidate| index.profiles[*candidate].id > profile.id)

@@ -6,7 +6,7 @@ mod r#use;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Args;
@@ -107,6 +107,17 @@ pub(crate) struct ProfileArgs {
     pub(crate) profile: String,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct InstallArgs {
+    /// Model ID or name
+    #[arg(value_name = "ID_OR_MODEL")]
+    pub(crate) profile: String,
+
+    /// Complete model installation directory
+    #[arg(short, long, value_name = "DIRECTORY")]
+    pub(crate) path: Option<PathBuf>,
+}
+
 #[derive(Debug, Error)]
 pub enum ModelError {
     #[error("{0}")]
@@ -132,7 +143,8 @@ pub(crate) fn selected_profile() -> Result<String, ModelError> {
     sync_config()?;
     let index = load_index()?;
     let configured = read_config()?;
-    let installed = installed_profiles(&index);
+    let config = read_model_config()?;
+    let installed = installed_profiles_from(&index, &config);
     if let Some(configured) = configured {
         if installed.iter().any(|name| name == &configured) {
             return Ok(configured);
@@ -162,8 +174,9 @@ pub(crate) fn shortcuts() -> Result<ShortcutConfig, ModelError> {
     Ok(shortcuts)
 }
 
-pub(crate) fn model_path(name: &str) -> PathBuf {
-    model_root().join(name)
+pub(crate) fn model_path(name: &str) -> Result<PathBuf, ModelError> {
+    let config = read_model_config()?;
+    Ok(configured_path(&config, name).unwrap_or_else(|| default_model_path(name)))
 }
 
 pub(crate) fn resolve_profile<'a>(
@@ -185,11 +198,16 @@ pub(crate) fn resolve_profile<'a>(
         .ok_or_else(|| ModelError::Index(format!("unknown model profile: {selector}")))
 }
 
-pub(crate) fn installed_profiles(index: &ModelIndex) -> Vec<String> {
+pub(crate) fn installed_profiles(index: &ModelIndex) -> Result<Vec<String>, ModelError> {
+    let config = read_model_config()?;
+    Ok(installed_profiles_from(index, &config))
+}
+
+fn installed_profiles_from(index: &ModelIndex, config: &ModelConfig) -> Vec<String> {
     let mut profiles: Vec<_> = index
         .profiles
         .iter()
-        .filter(|(name, _)| model_path(name).join("manifest.toml").is_file())
+        .filter(|(name, _)| configured_path(config, name).is_some_and(|path| has_manifest(&path)))
         .map(|(name, _)| name.clone())
         .collect();
     profiles.sort_by_key(|name| index.profiles[name].id);
@@ -217,29 +235,32 @@ pub(crate) fn sync_config() -> Result<(), ModelError> {
     let path = config_path();
     let had_config = path.is_file();
     let mut config = read_model_config()?;
-    let installed = installed_profiles(&index);
-    let models = installed
-        .iter()
-        .map(|name| {
-            (
+    let mut installed = BTreeMap::new();
+    for name in index.profiles.keys() {
+        let configured = configured_path(&config, name).filter(|path| has_manifest(path));
+        let path = configured.or_else(|| {
+            let path = default_model_path(name);
+            has_manifest(&path).then_some(path)
+        });
+        if let Some(path) = path {
+            installed.insert(
                 name.clone(),
                 InstalledModel {
-                    path: model_path(name).display().to_string(),
+                    path: path.display().to_string(),
                 },
-            )
-        })
-        .collect();
+            );
+        }
+    }
+    let mut installed_names: Vec<_> = installed.keys().cloned().collect();
+    installed_names.sort_by_key(|name| index.profiles[name].id);
     let select = config
         .models
         .select
         .as_ref()
-        .filter(|name| installed.iter().any(|installed| installed == *name))
+        .filter(|name| installed_names.iter().any(|installed| installed == *name))
         .cloned()
-        .or_else(|| installed.first().cloned());
-    let updated_models = ModelsConfig {
-        select,
-        installed: models,
-    };
+        .or_else(|| installed_names.first().cloned());
+    let updated_models = ModelsConfig { select, installed };
     let changed = config.models != updated_models;
     config.models = updated_models;
     if changed && (had_config || !config.models.installed.is_empty()) {
@@ -260,21 +281,20 @@ fn read_model_config() -> Result<ModelConfig, ModelError> {
 }
 
 pub(crate) fn write_config(name: &str) -> Result<(), ModelError> {
-    let index = load_index()?;
-    let installed = installed_profiles(&index);
     let mut config = read_model_config()?;
     config.models.select = Some(name.to_owned());
-    config.models.installed = installed
-        .iter()
-        .map(|name| {
-            (
-                name.clone(),
-                InstalledModel {
-                    path: model_path(name).display().to_string(),
-                },
-            )
-        })
-        .collect();
+    save_config(&config)
+}
+
+pub(crate) fn record_install(name: &str, path: &Path) -> Result<(), ModelError> {
+    let mut config = read_model_config()?;
+    config.models.select = Some(name.to_owned());
+    config.models.installed.insert(
+        name.to_owned(),
+        InstalledModel {
+            path: path.display().to_string(),
+        },
+    );
     save_config(&config)
 }
 
@@ -377,6 +397,22 @@ fn model_root() -> PathBuf {
         .join("kdeocr/models")
 }
 
+pub(crate) fn default_model_path(name: &str) -> PathBuf {
+    model_root().join(name)
+}
+
+fn configured_path(config: &ModelConfig, name: &str) -> Option<PathBuf> {
+    config
+        .models
+        .installed
+        .get(name)
+        .map(|model| PathBuf::from(&model.path))
+}
+
+fn has_manifest(path: &Path) -> bool {
+    path.is_absolute() && path.join("manifest.toml").is_file()
+}
+
 fn find_command(name: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
@@ -391,9 +427,11 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
 
     use super::{
-        InstalledModel, ModelConfig, ModelsConfig, ShortcutConfig, model_index, resolve_profile,
+        InstalledModel, ModelConfig, ModelsConfig, ShortcutConfig, installed_profiles_from,
+        model_index, resolve_profile,
     };
 
     #[test]
@@ -455,6 +493,32 @@ mod tests {
                 copy: Some("Alt+1".to_owned()),
                 ocr: Some("Alt+2".to_owned()),
             }
+        );
+    }
+
+    #[test]
+    fn finds_custom_path() {
+        let index = model_index();
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("custom-small");
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("manifest.toml"), "").unwrap();
+        let config = ModelConfig {
+            models: ModelsConfig {
+                select: Some("ppocrv6-small-r1".to_owned()),
+                installed: BTreeMap::from([(
+                    "ppocrv6-small-r1".to_owned(),
+                    InstalledModel {
+                        path: path.display().to_string(),
+                    },
+                )]),
+            },
+            ..ModelConfig::default()
+        };
+
+        assert_eq!(
+            installed_profiles_from(&index, &config),
+            vec!["ppocrv6-small-r1"]
         );
     }
 }

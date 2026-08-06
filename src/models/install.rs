@@ -7,18 +7,32 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use tempfile::TempDir;
 
-use super::{ModelError, load_index, model_path, resolve_profile, sync_config, write_config};
+use super::{
+    ModelError, default_model_path, load_index, model_path, record_install, resolve_profile,
+    sync_config,
+};
 
 const MAX_MODEL_WINDOW_SIZE: u64 = 256 * 1024 * 1024;
 
-pub(crate) fn run(selector: &str) -> Result<(), ModelError> {
+pub(crate) fn run(selector: &str, path: Option<&Path>) -> Result<(), ModelError> {
     sync_config()?;
     let index = load_index()?;
     let (name, profile) = resolve_profile(&index, selector)?;
-    let destination = model_path(name);
-    if destination.exists() {
+    if model_path(name)?.join("manifest.toml").is_file() {
         return Err(ModelError::Operation(format!(
             "{name} is already installed"
+        )));
+    }
+    let destination = match path {
+        Some(path) => std::path::absolute(path).map_err(|error| {
+            ModelError::Operation(format!("could not resolve model path: {error}"))
+        })?,
+        None => default_model_path(name),
+    };
+    if destination.exists() {
+        return Err(ModelError::Operation(format!(
+            "model destination already exists: {}",
+            destination.display()
         )));
     }
     let model_root = destination
@@ -71,7 +85,14 @@ pub(crate) fn run(selector: &str) -> Result<(), ModelError> {
     fs::rename(package, &destination).map_err(|error| {
         ModelError::Operation(format!("could not install model profile: {error}"))
     })?;
-    write_config(name)?;
+    if let Err(error) = record_install(name, &destination) {
+        fs::remove_dir_all(&destination).map_err(|cleanup| {
+            ModelError::Operation(format!(
+                "could not save model configuration: {error}; cleanup failed: {cleanup}"
+            ))
+        })?;
+        return Err(error);
+    }
     println!("Installed {name}");
     println!("Path: {}", display_path(&destination));
     Ok(())
