@@ -23,12 +23,14 @@ install() & _release_build:
     chmod +x "$HOME/.local/bin/.kocr-install"
     mv "$HOME/.local/bin/.kocr-install" "$HOME/.local/bin/kocr"
     echo "Installed kocr to $HOME/.local/bin"
+    systemctl --user restart kocr.service
+    echo "Restarted daemon."
     du -sh $(which kocr)
 
 # Uninstall the local kocr CLI
 uninstall():
     rm -f "$HOME/.local/bin/kocr"
-    echo "Uninstalled kocr"
+    echo "Uninstalled kocr."
 
 # Run the local CI
 ci() & check & test:
