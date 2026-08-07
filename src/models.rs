@@ -23,6 +23,7 @@ include!(concat!(env!("OUT_DIR"), "/model_index.rs"));
 const CONFIG_FILE: &str = "kdeocr/config.toml";
 const DEFAULT_COPY_SHORTCUT: &str = "Alt+1";
 const DEFAULT_OCR_SHORTCUT: &str = "Alt+2";
+const DEFAULT_ONELINE_SHORTCUT: &str = "Alt+3";
 const CONFIG_COMMENTS: &str = "# Supported modifiers: Mod, Ctrl, Alt, Shift.\n# Key examples: A-Z, 0-9, F1-F35, Escape, Space, Slash.\n# Set a shortcut to an empty string to disable it.\n\n";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -37,6 +38,11 @@ pub(crate) struct ShortcutConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) ocr: Option<String>,
+    #[serde(
+        default = "default_oneline_shortcut",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) oneline: Option<String>,
 }
 
 fn default_copy_shortcut() -> Option<String> {
@@ -47,11 +53,16 @@ fn default_ocr_shortcut() -> Option<String> {
     Some(DEFAULT_OCR_SHORTCUT.to_owned())
 }
 
+fn default_oneline_shortcut() -> Option<String> {
+    Some(DEFAULT_ONELINE_SHORTCUT.to_owned())
+}
+
 impl Default for ShortcutConfig {
     fn default() -> Self {
         Self {
             copy: default_copy_shortcut(),
             ocr: default_ocr_shortcut(),
+            oneline: default_oneline_shortcut(),
         }
     }
 }
@@ -171,6 +182,7 @@ pub(crate) fn shortcuts() -> Result<ShortcutConfig, ModelError> {
     let mut shortcuts = read_model_config()?.shortcut;
     shortcuts.copy = non_empty(shortcuts.copy);
     shortcuts.ocr = non_empty(shortcuts.ocr);
+    shortcuts.oneline = non_empty(shortcuts.oneline);
     Ok(shortcuts)
 }
 
@@ -454,6 +466,7 @@ mod tests {
             shortcut: ShortcutConfig {
                 copy: Some("Alt+1".to_owned()),
                 ocr: Some("Alt+2".to_owned()),
+                oneline: Some("Alt+3".to_owned()),
             },
             models: ModelsConfig {
                 select: Some("ppocrv6-small-r1".to_owned()),
@@ -470,7 +483,7 @@ mod tests {
 
         assert_eq!(
             content,
-            "[shortcut]\ncopy = \"Alt+1\"\nocr = \"Alt+2\"\n\n[models]\nselect = \"ppocrv6-small-r1\"\n\n[models.ppocrv6-small-r1]\npath = \"/models/ppocrv6-small-r1\"\n"
+            "[shortcut]\ncopy = \"Alt+1\"\nocr = \"Alt+2\"\noneline = \"Alt+3\"\n\n[models]\nselect = \"ppocrv6-small-r1\"\n\n[models.ppocrv6-small-r1]\npath = \"/models/ppocrv6-small-r1\"\n"
         );
     }
 
@@ -492,8 +505,19 @@ mod tests {
             ShortcutConfig {
                 copy: Some("Alt+1".to_owned()),
                 ocr: Some("Alt+2".to_owned()),
+                oneline: Some("Alt+3".to_owned()),
             }
         );
+    }
+
+    #[test]
+    fn oneline_in_existing_config() {
+        let config: ModelConfig =
+            toml::from_str("[shortcut]\ncopy = \"Alt+4\"\nocr = \"Alt+5\"\n").unwrap();
+
+        assert_eq!(config.shortcut.copy.as_deref(), Some("Alt+4"));
+        assert_eq!(config.shortcut.ocr.as_deref(), Some("Alt+5"));
+        assert_eq!(config.shortcut.oneline.as_deref(), Some("Alt+3"));
     }
 
     #[test]

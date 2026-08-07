@@ -90,6 +90,10 @@ struct CaptureArgs {
     /// Recognize the capture and copy text
     #[arg(short = 'o', long = "ocr")]
     ocr: bool,
+
+    /// Merge recognized lines into a single line
+    #[arg(long, requires = "ocr")]
+    oneline: bool,
 }
 
 #[derive(Debug, Error)]
@@ -153,7 +157,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), AppError> {
     match cli.command {
-        Some(CommandKind::Capture(args)) => run_capture(args.output, args.ocr),
+        Some(CommandKind::Capture(args)) => run_capture(args.output, args.ocr, args.oneline),
         Some(CommandKind::Doctor) => run_doctor(),
         Some(CommandKind::List) => models::list().map_err(AppError::Model),
         Some(CommandKind::Install(args)) => {
@@ -165,9 +169,10 @@ fn run(cli: Cli) -> Result<(), AppError> {
         Some(CommandKind::Use(args)) => models::use_model(&args.profile).map_err(AppError::Model),
         Some(CommandKind::Config) => models::edit_config().map_err(AppError::Config),
         Some(CommandKind::Daemon) => {
-            keyboard::run(|recognize| run_capture(None, recognize)).map_err(Into::into)
+            keyboard::run(|recognize, oneline| run_capture(None, recognize, oneline))
+                .map_err(Into::into)
         }
-        Some(CommandKind::Image(args)) => ocr::run(args.image).map_err(AppError::Ocr),
+        Some(CommandKind::Image(args)) => ocr::run(args.image, args.oneline).map_err(AppError::Ocr),
         Some(CommandKind::Help) => print_help(),
         Some(CommandKind::Version) => {
             println!("kocr {}", env!("CARGO_PKG_VERSION"));
@@ -196,7 +201,7 @@ fn error_code(error: &AppError) -> u8 {
     }
 }
 
-fn run_capture(output: Option<PathBuf>, recognize: bool) -> Result<(), AppError> {
+fn run_capture(output: Option<PathBuf>, recognize: bool, oneline: bool) -> Result<(), AppError> {
     let spectacle = require_command("spectacle")?;
     let temp_dir = TempDir::new().map_err(|error| {
         AppError::Output(format!("could not create temporary directory: {error}"))
@@ -233,7 +238,7 @@ fn run_capture(output: Option<PathBuf>, recognize: bool) -> Result<(), AppError>
     validate_png(&png)?;
 
     if recognize {
-        let text = ocr::recognize(capture_path)?;
+        let text = ocr::recognize(capture_path, oneline)?;
         copy_text(&text)?;
         println!("{text}");
     } else {
@@ -443,11 +448,12 @@ mod tests {
 
     #[test]
     fn parses_capture_ocr() {
-        let cli = Cli::try_parse_from(["kocr", "capture", "-o"]).unwrap();
+        let cli = Cli::try_parse_from(["kocr", "capture", "-o", "--oneline"]).unwrap();
         let Some(CommandKind::Capture(args)) = cli.command else {
             panic!("expected capture command");
         };
         assert!(args.ocr);
+        assert!(args.oneline);
     }
 
     #[test]
@@ -462,7 +468,15 @@ mod tests {
 
     #[test]
     fn parses_image() {
-        let cli = Cli::try_parse_from(["kocr", "image", "image.png"]).unwrap();
-        assert!(matches!(cli.command, Some(CommandKind::Image(_))));
+        let cli = Cli::try_parse_from(["kocr", "image", "image.png", "--oneline"]).unwrap();
+        let Some(CommandKind::Image(args)) = cli.command else {
+            panic!("expected image command");
+        };
+        assert!(args.oneline);
+    }
+
+    #[test]
+    fn oneline_requires_ocr() {
+        assert!(Cli::try_parse_from(["kocr", "capture", "--oneline"]).is_err());
     }
 }

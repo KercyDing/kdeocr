@@ -16,6 +16,7 @@ const SERVICE_PATH: &str = "/kglobalaccel";
 const COMPONENT: &str = "kocr";
 const COPY_ACTION: &str = "copy";
 const OCR_ACTION: &str = "capture-ocr";
+const ONELINE_ACTION: &str = "capture-ocr-oneline";
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SET_PRESENT_NO_AUTOLOAD: u32 = 2 | 4;
 
@@ -39,6 +40,17 @@ enum Event {
 enum Trigger {
     Copy,
     Ocr,
+    Oneline,
+}
+
+impl Trigger {
+    fn capture_options(self) -> (bool, bool) {
+        match self {
+            Self::Copy => (false, false),
+            Self::Ocr => (true, false),
+            Self::Oneline => (true, true),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -51,11 +63,12 @@ struct Binding {
 struct Bindings {
     copy: Option<Binding>,
     ocr: Option<Binding>,
+    oneline: Option<Binding>,
 }
 
 pub(crate) fn run<F, E>(mut on_trigger: F) -> Result<(), KeyboardError>
 where
-    F: FnMut(bool) -> Result<(), E>,
+    F: FnMut(bool, bool) -> Result<(), E>,
     E: std::fmt::Display,
 {
     let connection = Connection::session()
@@ -81,7 +94,7 @@ where
             Ok(Event::Trigger(trigger)) => {
                 if crate::models::selected_profile().is_err() {
                     notify_no_model();
-                } else if let Err(error) = on_trigger(matches!(trigger, Trigger::Ocr)) {
+                } else if let Err(error) = on_trigger_options(&mut on_trigger, trigger) {
                     eprintln!("\x1b[31mShortcut capture failed: {error}\x1b[0m");
                 }
                 trigger_pending.store(false, Ordering::Release);
@@ -100,6 +113,14 @@ where
         }
         reload_config(&connection, &mut config_content, &mut bindings);
     }
+}
+
+fn on_trigger_options<F, E>(on_trigger: &mut F, trigger: Trigger) -> Result<(), E>
+where
+    F: FnMut(bool, bool) -> Result<(), E>,
+{
+    let (recognize, oneline) = trigger.capture_options();
+    on_trigger(recognize, oneline)
 }
 
 fn reload_config(
@@ -169,6 +190,7 @@ fn listen(
         let trigger = match action.as_str() {
             COPY_ACTION => Trigger::Copy,
             OCR_ACTION => Trigger::Ocr,
+            ONELINE_ACTION => Trigger::Oneline,
             _ => continue,
         };
         if component == COMPONENT
@@ -194,6 +216,12 @@ fn register(connection: &Connection, bindings: &Bindings) -> Result<(), Keyboard
         OCR_ACTION,
         "Capture screenshot and recognize text",
         bindings.ocr.as_ref(),
+    )?;
+    register_action(
+        &proxy,
+        ONELINE_ACTION,
+        "Capture screenshot and recognize text in one line",
+        bindings.oneline.as_ref(),
     )
 }
 
@@ -249,7 +277,8 @@ fn load_bindings() -> Result<Bindings, KeyboardError> {
     })?;
     let copy = parse_binding(shortcuts.copy)?;
     let ocr = parse_binding(shortcuts.ocr)?;
-    Ok(Bindings { copy, ocr })
+    let oneline = parse_binding(shortcuts.oneline)?;
+    Ok(Bindings { copy, ocr, oneline })
 }
 
 fn parse_binding(shortcut: Option<String>) -> Result<Option<Binding>, KeyboardError> {
@@ -384,7 +413,7 @@ fn operation(context: &str, error: impl std::fmt::Display) -> KeyboardError {
 
 #[cfg(test)]
 mod tests {
-    use super::{QT_ALT, QT_META, QT_SHIFT, parse_binding, parse_shortcut};
+    use super::{QT_ALT, QT_META, QT_SHIFT, Trigger, parse_binding, parse_shortcut};
 
     #[test]
     fn parses_shortcut() {
@@ -399,5 +428,12 @@ mod tests {
     #[test]
     fn accepts_disabled_binding() {
         assert!(parse_binding(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn maps_capture_options() {
+        assert_eq!(Trigger::Copy.capture_options(), (false, false));
+        assert_eq!(Trigger::Ocr.capture_options(), (true, false));
+        assert_eq!(Trigger::Oneline.capture_options(), (true, true));
     }
 }

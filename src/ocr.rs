@@ -18,6 +18,10 @@ pub(crate) struct ImageArgs {
     /// Input image path
     #[arg(value_name = "PNG")]
     pub(crate) image: PathBuf,
+
+    /// Merge recognized lines into a single line
+    #[arg(long)]
+    pub(crate) oneline: bool,
 }
 
 #[derive(Debug, Error)]
@@ -41,13 +45,13 @@ pub enum OcrError {
     Runtime(String),
 }
 
-pub fn run(image_path: PathBuf) -> Result<(), OcrError> {
-    let text = recognize(image_path)?;
+pub fn run(image_path: PathBuf, oneline: bool) -> Result<(), OcrError> {
+    let text = recognize(image_path, oneline)?;
     println!("{text}");
     Ok(())
 }
 
-pub fn recognize(image_path: PathBuf) -> Result<String, OcrError> {
+pub fn recognize(image_path: PathBuf, oneline: bool) -> Result<String, OcrError> {
     crate::models::sync_config().map_err(|error| OcrError::ModelSelection(error.to_string()))?;
     let profile = crate::models::selected_profile()
         .map_err(|error| OcrError::ModelSelection(error.to_string()))?;
@@ -104,7 +108,57 @@ pub fn recognize(image_path: PathBuf) -> Result<String, OcrError> {
             manifest.space_index,
         )?);
     }
-    Ok(lines.join("\n"))
+    Ok(join_lines(&lines, oneline))
+}
+
+fn join_lines(lines: &[String], oneline: bool) -> String {
+    if !oneline {
+        return lines.join("\n");
+    }
+
+    let mut text = String::new();
+    for line in lines {
+        if needs_line_space(&text, line) {
+            text.push(' ');
+        }
+        text.push_str(line);
+    }
+    text
+}
+
+fn needs_line_space(left: &str, right: &str) -> bool {
+    let Some(left) = left.chars().next_back() else {
+        return false;
+    };
+    let Some(right) = right.chars().next() else {
+        return false;
+    };
+    if left.is_whitespace() || right.is_whitespace() {
+        return false;
+    }
+    if is_cjk(left) || is_cjk(right) {
+        return false;
+    }
+    !matches!(left, '(' | '[' | '{' | '-' | '/' | '—')
+        && !matches!(
+            right,
+            ',' | '.' | ';' | ':' | '!' | '?' | '%' | ')' | ']' | '}' | '\'' | '’'
+        )
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x2E80..=0x303F
+            | 0x3040..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFF01..=0xFF60
+            | 0x20000..=0x2FA1F
+            | 0x30000..=0x323AF
+    )
 }
 
 fn recognize_crop(
@@ -264,7 +318,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{preserve_gap, runtime_library_from, text_overlap};
+    use super::{join_lines, preserve_gap, runtime_library_from, text_overlap};
 
     #[test]
     fn overlaps_case() {
@@ -279,6 +333,32 @@ mod tests {
         );
         assert_eq!(preserve_gap("● text".to_owned(), "●"), "● text");
         assert_eq!(preserve_gap("●text".to_owned(), "Q"), "● text");
+    }
+
+    #[test]
+    fn joins_recognized_lines() {
+        let english = vec!["first line".to_owned(), "second line".to_owned()];
+        assert_eq!(join_lines(&english, false), "first line\nsecond line");
+        assert_eq!(join_lines(&english, true), "first line second line");
+
+        let chinese = vec!["中文第一行".to_owned(), "中文第二行".to_owned()];
+        assert_eq!(join_lines(&chinese, true), "中文第一行中文第二行");
+    }
+
+    #[test]
+    fn joins_mixed_text() {
+        assert_eq!(
+            join_lines(&["version 1".to_owned(), ".0 released".to_owned()], true),
+            "version 1.0 released"
+        );
+        assert_eq!(
+            join_lines(&["cross-".to_owned(), "platform".to_owned()], true),
+            "cross-platform"
+        );
+        assert_eq!(
+            join_lines(&["支持 Rust".to_owned(), "language 开发".to_owned()], true),
+            "支持 Rust language 开发"
+        );
     }
 
     #[test]
