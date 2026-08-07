@@ -53,12 +53,13 @@ kocr config           # Open configuration in your default editor
 
 ## Keyboard Shortcuts
 
-The installer registers a systemd user service with two default shortcuts:
+The installer registers a systemd user service with three default shortcuts:
 
 | Shortcut | Action |
 |----------|--------|
 | `Alt+1`  | Capture and copy PNG |
 | `Alt+2`  | Capture, OCR, and copy text |
+| `Alt+3`  | Capture, OCR, merge into one line, and copy text |
 
 Change shortcuts with `kocr config`. The daemon reloads the configuration automatically on save.
 
@@ -72,6 +73,7 @@ Example:
 [shortcut]
 copy = "Alt+1"
 ocr  = "Alt+2"
+oneline = "Alt+3"
 
 [models]
 select = "ppocrv6-small-r1"

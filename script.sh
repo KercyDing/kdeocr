@@ -157,7 +157,7 @@ EOF
 
     echo "Installed kocr to $binary_path"
     echo "Model: $model"
-    echo "Shortcuts: Alt+1 (copy), Alt+2 (OCR)"
+    echo "Shortcuts: Alt+1 (copy), Alt+2 (OCR), Alt+3 (one-line OCR)"
 }
 
 uninstall_kocr() {
@@ -176,6 +176,15 @@ uninstall_kocr() {
             ss \
             kocr \
             capture-ocr \
+            >/dev/null 2>&1 || true
+        busctl --user call \
+            org.kde.kglobalaccel \
+            /kglobalaccel \
+            org.kde.KGlobalAccel \
+            unregister \
+            ss \
+            kocr \
+            capture-ocr-oneline \
             >/dev/null 2>&1 || true
     fi
 
