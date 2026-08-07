@@ -157,10 +157,18 @@ fn preserve_gap(text: String, prefix: &str) -> String {
     format!("{first} {suffix}")
 }
 
-fn init_runtime() -> Result<(), OcrError> {
-    let library = env::var_os("ORT_DYLIB_PATH")
+pub(crate) fn runtime_library() -> PathBuf {
+    runtime_library_from(env::var_os("ORT_DYLIB_PATH"))
+}
+
+fn runtime_library_from(configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/lib/libonnxruntime.so"));
+        .unwrap_or_else(|| PathBuf::from("libonnxruntime.so"))
+}
+
+pub(crate) fn init_runtime() -> Result<(), OcrError> {
+    let library = runtime_library();
     ort::init_from(&library)
         .map_err(|error| {
             OcrError::Runtime(format!("could not load {}: {error}", library.display()))
@@ -253,7 +261,10 @@ fn run_tensor_with_shape(
 
 #[cfg(test)]
 mod tests {
-    use super::{preserve_gap, text_overlap};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::{preserve_gap, runtime_library_from, text_overlap};
 
     #[test]
     fn overlaps_case() {
@@ -268,5 +279,17 @@ mod tests {
         );
         assert_eq!(preserve_gap("● text".to_owned(), "●"), "● text");
         assert_eq!(preserve_gap("●text".to_owned(), "Q"), "● text");
+    }
+
+    #[test]
+    fn selects_runtime_library() {
+        assert_eq!(
+            runtime_library_from(None),
+            PathBuf::from("libonnxruntime.so")
+        );
+        assert_eq!(
+            runtime_library_from(Some(OsString::from("/custom/libonnxruntime.so"))),
+            PathBuf::from("/custom/libonnxruntime.so")
+        );
     }
 }

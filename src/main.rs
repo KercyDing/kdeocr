@@ -355,18 +355,17 @@ fn command_check(name: &'static str) -> Check {
 }
 
 fn runtime_check() -> Check {
-    let output = Command::new("ldconfig").arg("-p").output();
-    let found = output
-        .ok()
-        .map(|result| String::from_utf8_lossy(&result.stdout).contains("libonnxruntime.so"))
-        .unwrap_or(false);
-    Check {
-        name: "onnxruntime",
-        ok: found,
-        detail: if found {
-            "libonnxruntime.so is registered with ldconfig".to_owned()
-        } else {
-            "libonnxruntime.so was not found in the system library cache".to_owned()
+    let library = ocr::runtime_library();
+    match ocr::init_runtime() {
+        Ok(()) => Check {
+            name: "onnxruntime",
+            ok: true,
+            detail: format!("loaded {}", library.display()),
+        },
+        Err(error) => Check {
+            name: "onnxruntime",
+            ok: false,
+            detail: error.to_string(),
         },
     }
 }
